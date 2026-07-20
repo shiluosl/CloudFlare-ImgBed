@@ -34,7 +34,7 @@ Channel records save only secret reference names, such as `WEBDAV_PASSWORD` or `
 
 ## Apply migrations
 
-Back up/export D1 before applying production migrations. V3 migration `0030_zero_cost_dr_v3.sql` is additive.
+Back up/export D1 before applying production migrations. All V3 migrations are additive and must be applied in numeric order: `0030_zero_cost_dr_v3.sql`, `0031_zero_cost_dr_health_leases.sql`, then `0032_zero_cost_dr_maintenance_state.sql`.
 
 ```powershell
 npx.cmd wrangler d1 migrations apply cloudflare-imgbed-zero-cost --local --config deploy/worker/wrangler.toml
@@ -54,7 +54,7 @@ npx.cmd wrangler deploy --dry-run --config deploy/worker/wrangler.toml
 npm.cmd run deploy:worker
 ```
 
-The checked-in cron triggers redispatch due D1 jobs every 15 minutes and perform bounded light channel health checks only while protection is `NORMAL`.
+The checked-in cron triggers redispatch due D1 jobs every 15 minutes and performs bounded light channel health checks only while protection is `NORMAL`. The D1-backed cursor rotates the bounded scan across enabled channels without KV or Durable Objects.
 
 ## Free-tier checklist
 

@@ -14,6 +14,9 @@ import { executeStorageJob, isExecutableStorageJob } from '../functions/queues/s
 import { inspectZeroCostFiles } from '../scripts/zero-cost-check.mjs';
 import { hasSensitiveConfig } from '../functions/api/manage/ops/channels.js';
 import { ChannelHealthService } from '../functions/core/health/channelHealthService.js';
+import { selectRotatingHealthCheckChannels } from '../functions/scheduled/maintenance.js';
+import { onRequestPatch as patchChannel } from '../functions/api/manage/ops/channels.js';
+import { onRequestPost as createPolicy } from '../functions/api/manage/ops/policies.js';
 import { v3ReadEnabled, v3UploadEnabled } from '../functions/core/config.js';
 import { StorageOrchestrator } from '../functions/core/storage/orchestrator.js';
 import { execFileSync } from 'node:child_process';
@@ -170,6 +173,37 @@ describe('read, delete, and queue recovery', () => {
 });
 
 describe('zero-cost controls and security', () => {
+  it('rotates bounded maintenance health checks across every channel', async () => {
+    const channels = Array.from({ length: 7 }, (_, index) => ({ id: `channel_${index + 1}`, cursor: index + 1 }));
+    const repository = {
+      cursor: 0,
+      async getMaintenanceCursor() { return this.cursor; },
+      async listChannelsAfter(cursor, limit) { return channels.filter(channel => channel.cursor > cursor).slice(0, limit); },
+      async setMaintenanceCursor(_name, cursor) { this.cursor = cursor; },
+    };
+    const first = await selectRotatingHealthCheckChannels(repository, 5);
+    const second = await selectRotatingHealthCheckChannels(repository, 5);
+    const third = await selectRotatingHealthCheckChannels(repository, 5);
+    assert.deepEqual(first.map(channel => channel.id), ['channel_1', 'channel_2', 'channel_3', 'channel_4', 'channel_5']);
+    assert.deepEqual(second.map(channel => channel.id), ['channel_6', 'channel_7']);
+    assert.deepEqual(third.map(channel => channel.id), ['channel_1', 'channel_2', 'channel_3', 'channel_4', 'channel_5']);
+  });
+  it('returns client errors for malformed management JSON and guard-limited mutations', async () => {
+    const malformedChannel = await patchChannel({ request: new Request('https://example.test/api/manage/ops/channels', { method: 'PATCH', body: '{' }), env: {} });
+    const malformedPolicy = await createPolicy({ request: new Request('https://example.test/api/manage/ops/policies', { method: 'POST', body: '{' }), env: {} });
+    assert.equal(malformedChannel.status, 400);
+    assert.equal(malformedPolicy.status, 400);
+
+    const env = { DB: readOnlyD1() };
+    const channelRequest = new Request('https://example.test/api/manage/ops/channels', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ channelId: 'channel_1', action: 'health_check' }) });
+    const policyRequest = new Request('https://example.test/api/manage/ops/policies', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({}) });
+    const channel = await patchChannel({ request: channelRequest, env });
+    const policy = await createPolicy({ request: policyRequest, env });
+    assert.equal(channel.status, 503);
+    assert.equal(policy.status, 503);
+    assert.equal((await channel.json()).code, 'ZERO_COST_GUARD');
+    assert.equal((await policy.json()).code, 'ZERO_COST_GUARD');
+  });
   it('enforces read-only writes while leaving reads outside the guard', async () => {
     const repository = { async getUsage() { return { uploads: 500 }; }, async incrementUsage() {}, async setProtectionLevel() {} };
     const guard = new ZeroCostGuard(repository, { DAILY_UPLOAD_SOFT_LIMIT: '500' });
@@ -261,4 +295,15 @@ class FileMemoryRepository {
   async updateReplica(id, patch) { Object.assign(this.replicas.find(item => item.id === id), patch); }
   async createTombstone(_id, generation) { this.file.status = 'deleting'; this.file.generation = generation + 1; this.tombstone = { generation: this.file.generation }; return this.tombstone; }
   async finalizeDeletion() { if (this.replicas.every(item => item.status === 'deleted')) this.file.status = 'deleted'; return this.file; }
+}
+
+function readOnlyD1() {
+  return {
+    prepare() {
+      return {
+        bind() { return this; },
+        async first() { return { uploads: 500, protection_level: 'NORMAL' }; },
+      };
+    },
+  };
 }

@@ -20,6 +20,19 @@ export class StorageRepository {
     const p = page(limit, cursor);
     return all(this.db.prepare('SELECT rowid AS cursor, * FROM storage_channels WHERE rowid > ? ORDER BY rowid LIMIT ?').bind(p.cursor, p.limit));
   }
+  async listChannelsAfter(cursor, limit = 5) {
+    const safeCursor = Number(cursor) || 0;
+    const safeLimit = Math.min(Math.max(Number(limit) || 5, 1), 20);
+    return all(this.db.prepare('SELECT rowid AS cursor, * FROM storage_channels WHERE rowid > ? ORDER BY rowid LIMIT ?').bind(safeCursor, safeLimit));
+  }
+  async getMaintenanceCursor(name) {
+    const row = await first(this.db.prepare('SELECT cursor FROM maintenance_state WHERE name=?').bind(name));
+    return row?.cursor || 0;
+  }
+  async setMaintenanceCursor(name, cursor) {
+    await this.db.prepare(`INSERT INTO maintenance_state(name,cursor,updated_at) VALUES(?,?,?)
+      ON CONFLICT(name) DO UPDATE SET cursor=excluded.cursor, updated_at=excluded.updated_at`).bind(name, Number(cursor) || 0, now()).run();
+  }
   async setChannelHealth(id, status, patch = {}) {
     const time = now();
     await this.db.prepare(`UPDATE storage_channels SET health_status=?, consecutive_failures=?, consecutive_successes=?, blocked_until=?, last_success_at=?, last_failure_at=?, last_error_code=?, last_error_message=?, updated_at=? WHERE id=?`)

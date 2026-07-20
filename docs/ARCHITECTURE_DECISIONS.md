@@ -55,3 +55,7 @@ Upstream legacy code still contains historical R2 behavior for compatibility. In
 ## ADR-014: The V3 Worker deployment uses no KV namespace binding
 
 The strict zero-cost V3 resource allowlist is limited to Workers, D1, Queues, static assets, Cache API, and optional Turnstile. The deployment generator rejects `KV_NAMESPACE_ID`, generated deployment TOML cannot contain `[[kv_namespaces]]`, and CI validates that boundary. Historical upstream Pages/Docker compatibility code may still mention KV, but it is not a V3 Worker deployment dependency.
+
+## ADR-015: Maintenance uses a D1 rotation cursor
+
+Health probes must be bounded to preserve free-tier capacity, but a fixed first-page query can starve later channels indefinitely. `maintenance_state` stores only a named numeric cursor in D1. Each eligible scheduled run probes at most five channels after that cursor and wraps to the first page only after reaching the end. This gives every channel eventual lightweight assessment without KV, Durable Objects, whole-table scans, or high-frequency probing.

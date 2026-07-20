@@ -13,7 +13,7 @@ npm.cmd run build
 npx.cmd wrangler deploy --dry-run --config deploy/worker/wrangler.toml
 ```
 
-The unit suite uses mocked WebDAV and Telegram endpoints plus executable local SQLite coverage for the V3 migration files. The separate integration suite exercises `JobService` and the Queue consumer together using a local durable-job model: Queue-send failure followed by cron redispatch, expired leases, duplicate delivery, and tombstone/generation cancellation. Together they cover dual-write success and degraded outcomes, strict and fast modes, idempotency, MIME/extension policy enforcement, read failover, repair scheduling, tombstone generation, read-only protection, endpoint validation, redirect rejection, channel circuit-breaker states, R2 deployment scanning, and migration execution.
+The unit suite uses mocked WebDAV and Telegram endpoints plus executable local SQLite coverage for the V3 migration files. The separate integration suite exercises `JobService` and the Queue consumer together using a local durable-job model: Queue-send failure followed by cron redispatch, expired leases, duplicate delivery, and tombstone/generation cancellation. Together they cover dual-write success and degraded outcomes, strict and fast modes, idempotency, MIME/extension policy enforcement, read failover, repair scheduling, tombstone generation, read-only protection, endpoint validation, redirect rejection, channel circuit-breaker states, fair rotation of the bounded maintenance health scan, malformed management JSON, Zero Cost Guard management rejections, R2 deployment scanning, and migration execution.
 
 ## External contract tests
 

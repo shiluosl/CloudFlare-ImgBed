@@ -8,49 +8,55 @@ export async function onRequestGet({ request, env }) {
 }
 
 export async function onRequestPost({ request, env }) {
-  const body = await request.json();
-  const app = runtime(env);
-  await app.guard.assertWrite({ admin: true });
-  const error = await validatePolicy(app.repository, body);
-  if (error) return Response.json({ error }, { status: 400 });
-  const policy = await app.repository.createPolicy({
-    id: body.id || `policy_${crypto.randomUUID()}`,
-    name: body.name,
-    enabled: body.enabled !== false,
-    writeMode: body.writeMode || 'safe',
-    primaryChannelId: body.primaryChannelId,
-    syncBackupChannelId: body.syncBackupChannelId || null,
-    asyncChannelIds: body.asyncChannelIds || [],
-    requiredCopies: body.requiredCopies || 2,
-    minimumReadableCopies: body.minimumReadableCopies || 1,
-    autoRepair: body.autoRepair !== false,
-    stopWhenQuotaRisk: body.stopWhenQuotaRisk !== false,
-  });
-  await app.repository.audit({ id: `audit_${crypto.randomUUID()}`, action: 'policy.created', targetType: 'storage_policy', targetId: policy.id, details: { writeMode: policy.write_mode } });
-  return Response.json(publicPolicy(policy), { status: 201 });
+  const body = await parseBody(request);
+  if (!body) return invalidJson();
+  try {
+    const app = runtime(env);
+    await app.guard.assertWrite({ admin: true });
+    const error = await validatePolicy(app.repository, body);
+    if (error) return Response.json({ error }, { status: 400 });
+    const policy = await app.repository.createPolicy({
+      id: body.id || `policy_${crypto.randomUUID()}`,
+      name: body.name,
+      enabled: body.enabled !== false,
+      writeMode: body.writeMode || 'safe',
+      primaryChannelId: body.primaryChannelId,
+      syncBackupChannelId: body.syncBackupChannelId || null,
+      asyncChannelIds: body.asyncChannelIds || [],
+      requiredCopies: body.requiredCopies || 2,
+      minimumReadableCopies: body.minimumReadableCopies || 1,
+      autoRepair: body.autoRepair !== false,
+      stopWhenQuotaRisk: body.stopWhenQuotaRisk !== false,
+    });
+    await app.repository.audit({ id: `audit_${crypto.randomUUID()}`, action: 'policy.created', targetType: 'storage_policy', targetId: policy.id, details: { writeMode: policy.write_mode } });
+    return Response.json(publicPolicy(policy), { status: 201 });
+  } catch (error) { return operationError(error); }
 }
 
 export async function onRequestPatch({ request, env }) {
-  const body = await request.json();
+  const body = await parseBody(request);
+  if (!body) return invalidJson();
   if (!body.id) return Response.json({ error: 'id is required' }, { status: 400 });
-  const app = runtime(env);
-  await app.guard.assertWrite({ admin: true });
-  const current = await app.repository.getPolicy(body.id);
-  if (!current) return Response.json({ error: 'Policy not found' }, { status: 404 });
-  const candidate = {
-    ...current,
-    ...body,
-    primaryChannelId: body.primaryChannelId ?? current.primary_channel_id,
-    syncBackupChannelId: body.syncBackupChannelId ?? current.sync_backup_channel_id,
-    asyncChannelIds: body.asyncChannelIds ?? JSON.parse(current.async_channels_json || '[]'),
-    writeMode: body.writeMode ?? current.write_mode,
-    name: body.name ?? current.name,
-  };
-  const error = await validatePolicy(app.repository, candidate);
-  if (error) return Response.json({ error }, { status: 400 });
-  const policy = await app.repository.updatePolicy(body.id, body);
-  await app.repository.audit({ id: `audit_${crypto.randomUUID()}`, action: 'policy.updated', targetType: 'storage_policy', targetId: policy.id });
-  return Response.json(publicPolicy(policy));
+  try {
+    const app = runtime(env);
+    await app.guard.assertWrite({ admin: true });
+    const current = await app.repository.getPolicy(body.id);
+    if (!current) return Response.json({ error: 'Policy not found' }, { status: 404 });
+    const candidate = {
+      ...current,
+      ...body,
+      primaryChannelId: body.primaryChannelId ?? current.primary_channel_id,
+      syncBackupChannelId: body.syncBackupChannelId ?? current.sync_backup_channel_id,
+      asyncChannelIds: body.asyncChannelIds ?? JSON.parse(current.async_channels_json || '[]'),
+      writeMode: body.writeMode ?? current.write_mode,
+      name: body.name ?? current.name,
+    };
+    const error = await validatePolicy(app.repository, candidate);
+    if (error) return Response.json({ error }, { status: 400 });
+    const policy = await app.repository.updatePolicy(body.id, body);
+    await app.repository.audit({ id: `audit_${crypto.randomUUID()}`, action: 'policy.updated', targetType: 'storage_policy', targetId: policy.id });
+    return Response.json(publicPolicy(policy));
+  } catch (error) { return operationError(error); }
 }
 
 async function validatePolicy(repository, body) {
@@ -69,3 +75,7 @@ async function validatePolicy(repository, body) {
 function publicPolicy(policy) {
   return { ...policy, async_channels: JSON.parse(policy.async_channels_json || '[]') };
 }
+
+async function parseBody(request) { try { const body = await request.json(); return body && typeof body === 'object' && !Array.isArray(body) ? body : null; } catch { return null; } }
+function invalidJson() { return Response.json({ error: 'Invalid JSON body' }, { status: 400 }); }
+function operationError(error) { return Response.json({ error: error.code === 'ZERO_COST_GUARD' ? 'Operation is paused by the Zero-Cost Guard' : error.message || 'Policy operation failed', code: error.code || 'POLICY_OPERATION_FAILED', protectionLevel: error.level || null }, { status: error.code === 'ZERO_COST_GUARD' ? 503 : 400 }); }
