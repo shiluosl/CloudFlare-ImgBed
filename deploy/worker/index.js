@@ -71,6 +71,7 @@ import * as fileCatchAll from '../../functions/file/[[path]].js';
 
 import { consumeStorageJobs } from '../../functions/queues/storageConsumer.js';
 import { runMaintenance } from '../../functions/scheduled/maintenance.js';
+import { recordWorkerRequestEstimate } from '../../functions/core/cost/requestMeter.js';
 
 // ==================== 自动生成的路由表 ====================
 
@@ -264,6 +265,10 @@ function isForbiddenZeroCostRequest(request, url, env) {
     return url.pathname === '/upload' && url.searchParams.get('uploadChannel') === 'cfr2';
 }
 
+function isV3MeteredPath(pathname) {
+    return pathname.startsWith('/file/') || pathname.startsWith('/api/manage/ops/');
+}
+
 // 只写入完整 GET 响应，Range 请求仅尝试命中已有完整缓存
 function isCacheStoreRequest(request) {
     return request.method === 'GET' && !request.headers.has('Range');
@@ -343,6 +348,9 @@ export default {
         }
 
         const { route, params } = matched;
+        if (isV3MeteredPath(pathname)) {
+            ctx.waitUntil(recordWorkerRequestEstimate(runtimeEnv, request));
+        }
         const mod = route.module;
 
         const method = request.method.toUpperCase();
@@ -385,10 +393,12 @@ export default {
     },
     async queue(batch, env, ctx) {
         if (env.STORAGE_QUEUE) {
+            ctx.waitUntil(recordWorkerRequestEstimate(zeroCostEnvironment(env), 'queue:' + Date.now() + ':' + batch.messages.length));
             return consumeStorageJobs(batch, zeroCostEnvironment(env), ctx);
         }
     },
     async scheduled(controller, env, ctx) {
+        ctx.waitUntil(recordWorkerRequestEstimate(zeroCostEnvironment(env), 'scheduled:' + (controller.scheduledTime || 'maintenance')));
         ctx.waitUntil(runMaintenance(zeroCostEnvironment(env)));
     },
 };

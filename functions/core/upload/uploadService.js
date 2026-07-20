@@ -18,7 +18,7 @@ export class UploadService {
     // Avoid creating a stranded receiving file when a required channel is already known unavailable.
     const synchronousSpecs = replicaSpecs.filter(replica => replica.role !== 'async_backup');
     const channels = await Promise.all(synchronousSpecs.map(replica => this.repository.getChannel(replica.channelId)));
-    if (channels.some(channel => !channel?.enabled || ['offline', 'disabled', 'quota_blocked'].includes(channel.health_status))) {
+    if (channels.some(channel => channelUnavailable(channel))) {
       const error = new Error('A synchronous storage channel is not writable');
       error.status = 503;
       throw error;
@@ -41,6 +41,11 @@ export class UploadService {
   async createReplica(file, replica) { if (!this.jobService || file.status === 'deleted') return; try { await this.guard.assertAsyncReplica(); } catch (error) { if (error.code === 'ZERO_COST_GUARD') return null; throw error; } return this.jobService.create({ id: `job_${crypto.randomUUID()}`, fileId: file.id, replicaId: replica.id, channelId: replica.channel_id, operation: 'CREATE_REPLICA', generation: file.generation, idempotencyKey: `create:${file.id}:${replica.id}:${file.generation}` }); }
 }
 function safeName(name) { return String(name).replace(/[\\/\0]/g, '_').slice(0, 240); }
+function channelUnavailable(channel) {
+  return !channel?.enabled
+    || ['offline', 'disabled', 'quota_blocked'].includes(channel.health_status)
+    || Number(channel.blocked_until || 0) > Date.now();
+}
 function splitBody(body, count) { if (count === 1) return [body]; if (body?.tee) { const [first, second] = body.tee(); return [first, second]; } if (body instanceof Blob) return Array.from({ length: count }, () => body.slice(0, body.size, body.type)); return Array.from({ length: count }, () => body); }
 
 const DEFAULT_MIME_EXTENSIONS = Object.freeze({

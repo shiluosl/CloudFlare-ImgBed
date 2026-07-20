@@ -50,6 +50,10 @@ export async function onRequestPatch({ request, env }) {
       asyncChannelIds: body.asyncChannelIds ?? JSON.parse(current.async_channels_json || '[]'),
       writeMode: body.writeMode ?? current.write_mode,
       name: body.name ?? current.name,
+      requiredCopies: body.requiredCopies ?? current.required_copies,
+      minimumReadableCopies: body.minimumReadableCopies ?? current.minimum_readable_copies,
+      autoRepair: body.autoRepair ?? Boolean(current.auto_repair),
+      stopWhenQuotaRisk: body.stopWhenQuotaRisk ?? Boolean(current.stop_when_quota_risk),
     };
     const error = await validatePolicy(app.repository, candidate);
     if (error) return Response.json({ error }, { status: 400 });
@@ -62,6 +66,10 @@ export async function onRequestPatch({ request, env }) {
 async function validatePolicy(repository, body) {
   if (!body.name || !body.primaryChannelId || !body.syncBackupChannelId) return 'name, primaryChannelId, and syncBackupChannelId are required';
   if (!['safe', 'strict', 'fast'].includes(body.writeMode || 'safe')) return 'Unsupported writeMode';
+  const requiredCopies = Number(body.requiredCopies ?? 2);
+  const minimumReadableCopies = Number(body.minimumReadableCopies ?? 1);
+  if (!Number.isInteger(requiredCopies) || requiredCopies < 1 || requiredCopies > 2) return 'requiredCopies must be an integer between 1 and 2';
+  if (!Number.isInteger(minimumReadableCopies) || minimumReadableCopies < 1 || minimumReadableCopies > requiredCopies) return 'minimumReadableCopies must be between 1 and requiredCopies';
   if (body.syncBackupChannelId && body.syncBackupChannelId === body.primaryChannelId) return 'Primary and sync backup channels must differ';
   const ids = [body.primaryChannelId, body.syncBackupChannelId, ...(body.asyncChannelIds || [])].filter(Boolean);
   if (new Set(ids).size !== ids.length) return 'Policy channels must be unique';

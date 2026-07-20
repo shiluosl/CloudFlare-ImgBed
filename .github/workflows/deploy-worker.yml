@@ -42,8 +42,10 @@ jobs:
           WORKER_VARS: ${{ secrets.WORKER_VARS }}
         run: |
           node deploy/worker/generate-routes.js
-          node deploy/worker/generate-toml.js
+          node deploy/worker/generate-toml.js --require-bindings
+          node scripts/validate-worker-deployment.mjs
           npm run check:zero-cost
+          npm run check:secrets
       - name: Deploy Worker
         if: steps.check.outputs.skip != 'true'
         uses: cloudflare/wrangler-action@v3

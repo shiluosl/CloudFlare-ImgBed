@@ -56,6 +56,8 @@ npm.cmd run deploy:worker
 
 The checked-in cron triggers redispatch of due D1 jobs every 15 minutes. At `NORMAL`, D1-backed cursors rotate bounded light channel checks and low-cost replica `head()` verification without KV or Durable Objects. At `WRITE_LIMITED`, verification remains paused while a separate bounded scan may enqueue only essential primary/synchronous-backup repairs that preserve the last readable copy.
 
+`WORKER_REQUEST_SAMPLE_RATE=100` is enabled by default. The Worker records an estimated 100 requests only for one sampled V3 request, using `cf-ray` when Cloudflare provides it. The write runs through `waitUntil`, so public `/file/{fileId}` reads are not turned into a D1 write per request. Set the value to `1` only for short non-production diagnostics; larger values reduce D1 write overhead at the cost of coarser estimates.
+
 ## Free-tier checklist
 
 - `ZERO_COST_MODE=true` and `ALLOW_R2=false` remain set.

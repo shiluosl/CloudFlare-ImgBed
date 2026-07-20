@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { StorageError, STORAGE_ERROR_CODES } from '../functions/core/storage/adapter.js';
 import { getAdapter } from '../functions/core/storage/registry.js';
 import { calculateProtectionLevel } from '../functions/core/cost/zeroCostGuard.js';
+import { recordWorkerRequestEstimate, shouldEstimateWorkerRequest, workerRequestSampleRate } from '../functions/core/cost/requestMeter.js';
 import { assertFileTransition, assertReplicaTransition, assertJobTransition } from '../functions/core/state/statusMachine.js';
 import { WebDavAdapter } from '../functions/adapters/webdav/webdavAdapter.js';
 import { TelegramAdapter } from '../functions/adapters/telegram/telegramAdapter.js';
@@ -29,6 +30,16 @@ describe('zero-cost DR core', () => {
   it('calculates the five-level protection state', () => {
     const limits = { WORKER_REQUEST_SOFT_LIMIT: 100, D1_READ_SOFT_LIMIT: 100, D1_WRITE_SOFT_LIMIT: 100, QUEUE_OPS_SOFT_LIMIT: 100, DAILY_UPLOAD_SOFT_LIMIT: 100 };
     assert.equal(calculateProtectionLevel({}, limits), 'NORMAL'); assert.equal(calculateProtectionLevel({ uploads: 75 }, limits), 'WARNING'); assert.equal(calculateProtectionLevel({ uploads: 90 }, limits), 'WRITE_LIMITED'); assert.equal(calculateProtectionLevel({ uploads: 100 }, limits), 'READ_ONLY'); assert.equal(calculateProtectionLevel({ uploads: 120 }, limits), 'EMERGENCY');
+  });
+  it('uses bounded sampled request estimates instead of a D1 write per request', async () => {
+    assert.equal(workerRequestSampleRate({}), 100);
+    assert.equal(workerRequestSampleRate({ WORKER_REQUEST_SAMPLE_RATE: '0' }), 1);
+    assert.equal(shouldEstimateWorkerRequest('any-v3-request', { WORKER_REQUEST_SAMPLE_RATE: '1' }), true);
+    const records = [];
+    const recorded = await recordWorkerRequestEstimate({ WORKER_REQUEST_SAMPLE_RATE: '7' }, 'sampled-request', () => ({ guard: { async record(change) { records.push(change); } } }));
+    assert.equal(recorded, shouldEstimateWorkerRequest('sampled-request', { WORKER_REQUEST_SAMPLE_RATE: '7' }));
+    if (recorded) assert.deepEqual(records, [{ worker_requests: 7 }]);
+    else assert.deepEqual(records, []);
   });
   it('guards status transitions while allowing controlled recovery', () => { assert.doesNotThrow(() => assertFileTransition('receiving', 'available')); assert.doesNotThrow(() => assertFileTransition('failed', 'available')); assert.throws(() => assertFileTransition('deleted', 'available')); assert.doesNotThrow(() => assertReplicaTransition('planned', 'uploading')); assert.doesNotThrow(() => assertReplicaTransition('missing', 'healthy')); assert.throws(() => assertReplicaTransition('deleted', 'healthy')); assert.doesNotThrow(() => assertJobTransition('pending', 'queued')); assert.throws(() => assertJobTransition('succeeded', 'running')); });
   it('supports independent V3 read and upload rollback flags', () => {
@@ -104,6 +115,15 @@ describe('upload disaster recovery workflow', () => {
     const service = new UploadService(repo, guard, { ZERO_COST_MODE: 'true' }, null);
 
     await assert.rejects(() => service.upload({ policyId: 'policy', idempotencyKey: 'offline-sync', name: 'demo.txt', contentType: 'text/plain', size: 3, body: new Blob(['abc']), admin: true }), /not writable/);
+    assert.equal(repo.files.size, 0);
+  });
+
+  it('rejects a rate-paused synchronous channel before creating a logical file', async () => {
+    const repo = new UploadMemoryRepository();
+    repo.channels.set('telegram', { id: 'telegram', enabled: 1, health_status: 'healthy', blocked_until: Date.now() + 60_000 });
+    const guard = { limits: { HARD_MAX_UPLOAD_BYTES: 20 * 1024 * 1024, MAX_UPLOAD_BYTES: 10 * 1024 * 1024, MAX_SYNC_CHANNELS: 2 }, async assertWrite() {}, async assertRepair() {}, async assertAsyncReplica() {}, async record() {} };
+    const service = new UploadService(repo, guard, { ZERO_COST_MODE: 'true' }, null);
+    await assert.rejects(() => service.upload({ policyId: 'policy', idempotencyKey: 'paused-sync', name: 'demo.txt', contentType: 'text/plain', size: 3, body: new Blob(['abc']), admin: true }), /not writable/);
     assert.equal(repo.files.size, 0);
   });
 
