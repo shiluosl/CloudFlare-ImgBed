@@ -13,7 +13,7 @@ npm.cmd run build
 npx.cmd wrangler deploy --dry-run --config deploy/worker/wrangler.toml
 ```
 
-The test suite uses mocked WebDAV and Telegram endpoints. It covers dual-write success and degraded outcomes, strict and fast modes, idempotency, read failover, repair scheduling, tombstone generation, late-job prevention, duplicate recount behavior, read-only protection, endpoint validation, and R2 deployment scanning.
+The test suite uses mocked WebDAV and Telegram endpoints plus executable local SQLite coverage for the V3 migration files. It covers dual-write success and degraded outcomes, strict and fast modes, idempotency, read failover, repair scheduling, tombstone generation, late-job prevention, duplicate recount behavior, read-only protection, endpoint validation, redirect rejection, channel circuit-breaker states, R2 deployment scanning, and migration execution.
 
 ## External contract tests
 
@@ -27,3 +27,5 @@ Run manual/CI contract tests only against dedicated non-production WebDAV and Te
 4. Create a tombstone, then send an old repair/create job and confirm it is cancelled.
 5. Increase usage counters to `READ_ONLY` and confirm upload is rejected while an existing read remains allowed.
 6. Add an active R2 binding in a disposable config copy and confirm `npm run check:zero-cost` fails.
+7. Mark a job `running` with an expired lease, run scheduled maintenance, and confirm it returns to the bounded D1 redispatch set.
+8. Set a channel to rate-limited and confirm its `blocked_until` timestamp excludes it from read candidates.

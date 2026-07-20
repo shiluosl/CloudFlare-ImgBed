@@ -13,6 +13,7 @@ import { assertExternalEndpoint } from '../functions/core/security/endpointValid
 import { executeStorageJob, isExecutableStorageJob } from '../functions/queues/storageConsumer.js';
 import { inspectZeroCostFiles } from '../scripts/zero-cost-check.mjs';
 import { hasSensitiveConfig } from '../functions/api/manage/ops/channels.js';
+import { ChannelHealthService } from '../functions/core/health/channelHealthService.js';
 
 describe('zero-cost DR core', () => {
   it('rejects R2 in zero-cost mode', () => {
@@ -22,7 +23,7 @@ describe('zero-cost DR core', () => {
     const limits = { WORKER_REQUEST_SOFT_LIMIT: 100, D1_READ_SOFT_LIMIT: 100, D1_WRITE_SOFT_LIMIT: 100, QUEUE_OPS_SOFT_LIMIT: 100, DAILY_UPLOAD_SOFT_LIMIT: 100 };
     assert.equal(calculateProtectionLevel({}, limits), 'NORMAL'); assert.equal(calculateProtectionLevel({ uploads: 75 }, limits), 'WARNING'); assert.equal(calculateProtectionLevel({ uploads: 90 }, limits), 'WRITE_LIMITED'); assert.equal(calculateProtectionLevel({ uploads: 100 }, limits), 'READ_ONLY'); assert.equal(calculateProtectionLevel({ uploads: 120 }, limits), 'EMERGENCY');
   });
-  it('guards status transitions', () => { assert.doesNotThrow(() => assertFileTransition('receiving', 'available')); assert.throws(() => assertFileTransition('deleted', 'available')); assert.doesNotThrow(() => assertReplicaTransition('planned', 'uploading')); assert.throws(() => assertReplicaTransition('deleted', 'healthy')); assert.doesNotThrow(() => assertJobTransition('pending', 'queued')); assert.throws(() => assertJobTransition('succeeded', 'running')); });
+  it('guards status transitions while allowing controlled recovery', () => { assert.doesNotThrow(() => assertFileTransition('receiving', 'available')); assert.doesNotThrow(() => assertFileTransition('failed', 'available')); assert.throws(() => assertFileTransition('deleted', 'available')); assert.doesNotThrow(() => assertReplicaTransition('planned', 'uploading')); assert.doesNotThrow(() => assertReplicaTransition('missing', 'healthy')); assert.throws(() => assertReplicaTransition('deleted', 'healthy')); assert.doesNotThrow(() => assertJobTransition('pending', 'queued')); assert.throws(() => assertJobTransition('succeeded', 'running')); });
 });
 
 describe('WebDAV adapter contract', () => {
@@ -43,7 +44,7 @@ describe('upload disaster recovery workflow', () => {
   it('records available, degraded, failed, strict, fast, and idempotent uploads', async () => {
     const repo = new UploadMemoryRepository();
     const jobs = { records: [], async create(job) { this.records.push(job); return job; } };
-    const guard = { limits: { HARD_MAX_UPLOAD_BYTES: 20 * 1024 * 1024, MAX_UPLOAD_BYTES: 10 * 1024 * 1024 }, async assertWrite() {}, async record() {} };
+    const guard = { limits: { HARD_MAX_UPLOAD_BYTES: 20 * 1024 * 1024, MAX_UPLOAD_BYTES: 10 * 1024 * 1024, MAX_SYNC_CHANNELS: 2 }, async assertWrite() {}, async assertRepair() {}, async assertAsyncReplica() {}, async record() {} };
     const service = new UploadService(repo, guard, { ZERO_COST_MODE: 'true' }, jobs);
     const statuses = ['healthy', 'healthy', 'healthy', 'retry_wait', 'retry_wait', 'retry_wait', 'healthy', 'retry_wait', 'healthy'];
     service.orchestrator = {
@@ -70,7 +71,7 @@ describe('upload disaster recovery workflow', () => {
     const repo = new UploadMemoryRepository();
     repo.policy.async_channels_json = JSON.stringify(['async-channel']);
     const jobs = { records: [], async create(job) { this.records.push(job); return job; } };
-    const guard = { limits: { HARD_MAX_UPLOAD_BYTES: 20 * 1024 * 1024, MAX_UPLOAD_BYTES: 10 * 1024 * 1024 }, async assertWrite() {}, async record() {} };
+    const guard = { limits: { HARD_MAX_UPLOAD_BYTES: 20 * 1024 * 1024, MAX_UPLOAD_BYTES: 10 * 1024 * 1024, MAX_SYNC_CHANNELS: 2 }, async assertWrite() {}, async assertRepair() {}, async assertAsyncReplica() {}, async record() {} };
     const service = new UploadService(repo, guard, { ZERO_COST_MODE: 'true' }, jobs);
     const written = [];
     service.orchestrator = {
@@ -145,6 +146,31 @@ describe('zero-cost controls and security', () => {
     assert.equal(hasSensitiveConfig({ baseUrl: 'https://storage.example/dav' }), false);
     assert.equal(hasSensitiveConfig({ password: 'not-allowed' }), true);
     assert.equal(hasSensitiveConfig({ botToken: 'not-allowed' }), true);
+  });
+  it('rejects redirecting and plaintext-credential adapter configuration', async () => {
+    const redirecting = new WebDavAdapter({ id: 'webdav', config: { baseUrl: 'https://storage.example/dav' } }, {}, async () => new Response(null, { status: 302 }));
+    await assert.rejects(() => redirecting.head({ objectKey: 'a.txt' }), error => error.code === STORAGE_ERROR_CODES.INVALID_CONFIGURATION);
+    let plaintextHeaders;
+    const plaintext = new WebDavAdapter({ id: 'webdav', config: { baseUrl: 'https://storage.example/dav', username: 'unsafe', password: 'unsafe' } }, {}, async (_url, init) => { plaintextHeaders = new Headers(init.headers); return new Response(null, { status: 200 }); });
+    await plaintext.healthCheck();
+    assert.equal(plaintextHeaders.has('Authorization'), false);
+    assert.equal(hasSensitiveConfig({ headers: { Authorization: 'Basic secret' } }), true);
+  });
+  it('moves a channel through degraded, offline, rate-limited, and recovered health', async () => {
+    const channel = { id: 'channel_1', health_status: 'unknown', consecutive_failures: 0, consecutive_successes: 0 };
+    const updates = [];
+    const repository = { async setChannelHealth(_id, status, patch) { updates.push({ status, patch }); Object.assign(channel, { health_status: status, consecutive_failures: patch.consecutiveFailures, consecutive_successes: patch.consecutiveSuccesses }); return channel; }, async getChannel() { return channel; } };
+    const health = new ChannelHealthService(repository, {});
+    await health.recordFailure(channel, Object.assign(new Error('network'), { code: 'NETWORK_ERROR' }));
+    await health.recordFailure(channel, Object.assign(new Error('network'), { code: 'NETWORK_ERROR' }));
+    await health.recordFailure(channel, Object.assign(new Error('network'), { code: 'NETWORK_ERROR' }));
+    assert.equal(updates.at(-1).status, 'degraded');
+    await health.recordFailure(channel, Object.assign(new Error('rate'), { code: 'RATE_LIMITED', retryAfterSeconds: 10 }));
+    assert.ok(updates.at(-1).patch.blockedUntil > Date.now());
+    await health.recordFailure(channel, Object.assign(new Error('auth'), { code: 'AUTH_FAILED' }));
+    assert.equal(updates.at(-1).status, 'offline');
+    await health.recordSuccess(channel); await health.recordSuccess(channel);
+    assert.equal(updates.at(-1).status, 'healthy');
   });
 });
 

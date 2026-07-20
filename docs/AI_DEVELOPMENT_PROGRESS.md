@@ -2,7 +2,7 @@
 
 ## Current phase
 
-Phase 12 is complete. Final local verification and scoped commits have been created; remote push is pending an SSH connectivity check.
+Hardening follow-up is in progress on the existing Phase 12 branch. The original V3 milestones are implemented, and the current follow-up closes data-consistency, guard-policy, endpoint-security, and migration-test gaps identified in a post-implementation audit.
 
 ## Completed
 
@@ -13,6 +13,11 @@ Phase 12 is complete. Final local verification and scoped commits have been crea
 - Added D1-backed jobs, Queue wakeups, cron redispatch, tombstone-first deletion, and repair/verify jobs.
 - Added zero-cost protection levels, deployment configuration guards, CI checks, and R2 rejection.
 - Added authenticated operations APIs and `frontend-dist/ops.html` without replacing the upstream frontend.
+- Added `0031_zero_cost_dr_health_leases.sql` for channel recovery counters, rate-limit pauses, and bounded recovery of expired Queue-worker leases.
+- Made tombstone insertion generation-aware without replacing an existing tombstone; stale deletion attempts now cannot overwrite deletion history.
+- Added recovery transitions for repaired files/replicas, D1 recovery of expired `running` jobs, and explicit guard policies for delete, repair, verification, async copies, and Queue dispatch.
+- Removed V3 adapter fallback to plaintext channel credentials, reject external redirects, validate Telegram proxy URLs, and redact remote object metadata from operations APIs.
+- Added executable SQLite migration coverage and channel health/circuit-breaker regression tests.
 
 ## Not completed / deliberate limits
 
@@ -25,10 +30,8 @@ Phase 12 is complete. Final local verification and scoped commits have been crea
 
 - Branch: `feature/zero-cost-dr-v3`
 - Latest upstream baseline commit before this work: `07fe250`
-- Final verification passed on 2026-07-21:
-  - `npm.cmd test` - 14 passing
-  - `npm.cmd run test:unit` - 14 passing
-  - `npm.cmd run test:integration` - 14 passing (mocked integration coverage)
+ - Latest hardening verification passed on 2026-07-21:
+  - `npm.cmd test` - 17 passing, including executable V3 migration coverage
   - `npm.cmd run lint`
   - `npm.cmd run check:migrations`
   - `npm.cmd run check:secrets`
@@ -65,5 +68,12 @@ Phase 12 is complete. Final local verification and scoped commits have been crea
 
 ## Next actions
 
-1. Push `feature/zero-cost-dr-v3` only after the remote SSH check succeeds.
-2. Apply migration `0030_zero_cost_dr_v3.sql` to an operator-owned D1 database and configure dedicated test WebDAV and Telegram credentials before external end-to-end testing.
+1. Commit and push the hardening changes on `feature/zero-cost-dr-v3`.
+2. Apply `0030_zero_cost_dr_v3.sql` and then `0031_zero_cost_dr_health_leases.sql` to an operator-owned D1 database.
+3. Configure dedicated non-production WebDAV and Telegram credentials before external end-to-end tests.
+
+## Known limits
+
+- The current test suite is local and mock-backed for external providers. No real WebDAV or Telegram credentials were used.
+- Legacy upstream R2 implementation files remain for compatibility, but the zero-cost Worker configuration contains no R2 binding and the V3 adapter/API paths reject R2.
+- The upstream operations page is intentionally extended rather than redesigned; advanced bulk operations and provider-specific telemetry remain bounded by free-tier limits.

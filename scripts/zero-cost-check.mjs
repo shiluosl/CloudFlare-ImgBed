@@ -11,6 +11,10 @@ const required = [
   ['wrangler.toml.example', /r2_buckets/i, 'Example Worker configuration declares an R2 binding'],
 ];
 const forbidden = [/workers_ai/i, /vectorize/i, /browser[_ -]?rendering/i, /\bcontainers\b/i];
+const activeSourceChecks = [
+  ['functions/core/storage/registry.js', /provider\s*===\s*['"]r2['"]\s*&&\s*!r2Allowed/i, 'V3 adapter registry must reject R2'],
+  ['deploy/worker/index.js', /r2_buckets/i, 'Generated Worker declares an R2 binding'],
+];
 export function inspectZeroCostFiles(baseDir = root) {
   const read = file => {
     const absolute = resolve(baseDir, file);
@@ -24,6 +28,12 @@ export function inspectZeroCostFiles(baseDir = root) {
     for (const pattern of forbidden) {
       if (pattern.test(read(file))) failures.push(`Forbidden paid Cloudflare resource in ${file}: ${pattern}`);
     }
+  }
+  for (const [file, pattern, message] of activeSourceChecks) {
+    const content = read(file);
+    if (file.endsWith('registry.js')) {
+      if (!pattern.test(content)) failures.push(`${message}: ${file}`);
+    } else if (pattern.test(content)) failures.push(`${message}: ${file}`);
   }
   if (!/ZERO_COST_MODE\s*=\s*"true"/.test(read('deploy/worker/wrangler.toml'))) failures.push('ZERO_COST_MODE must default to true');
   if (!/ALLOW_R2\s*=\s*"false"/.test(read('deploy/worker/wrangler.toml'))) failures.push('ALLOW_R2 must default to false');

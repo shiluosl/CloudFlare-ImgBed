@@ -35,9 +35,11 @@ async function validatePolicy(repository, body) {
   if (!['safe', 'strict', 'fast'].includes(body.writeMode || 'safe')) return 'Unsupported writeMode';
   if (body.syncBackupChannelId && body.syncBackupChannelId === body.primaryChannelId) return 'Primary and sync backup channels must differ';
   const ids = [body.primaryChannelId, body.syncBackupChannelId, ...(body.asyncChannelIds || [])].filter(Boolean);
+  if (new Set(ids).size !== ids.length) return 'Policy channels must be unique';
   const channels = await Promise.all(ids.map(id => repository.getChannel(id)));
   if (channels.some(channel => !channel)) return 'Every policy channel must exist';
   if (channels.some(channel => channel.provider === 'r2')) return 'R2 is disabled in Zero-Cost mode';
+  if (body.syncBackupChannelId && channels[0]?.failure_domain === channels[1]?.failure_domain) return 'Primary and sync backup channels must use different failure domains';
   return null;
 }
 
