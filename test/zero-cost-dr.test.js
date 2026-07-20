@@ -14,7 +14,7 @@ import { executeStorageJob, isExecutableStorageJob } from '../functions/queues/s
 import { inspectZeroCostFiles } from '../scripts/zero-cost-check.mjs';
 import { hasSensitiveConfig } from '../functions/api/manage/ops/channels.js';
 import { ChannelHealthService } from '../functions/core/health/channelHealthService.js';
-import { selectRotatingHealthCheckChannels } from '../functions/scheduled/maintenance.js';
+import { selectRotatingCriticalReplicaMaintenance, selectRotatingHealthCheckChannels, selectRotatingReplicaMaintenance, scheduleReplicaMaintenance } from '../functions/scheduled/maintenance.js';
 import { onRequestPatch as patchChannel } from '../functions/api/manage/ops/channels.js';
 import { onRequestPost as createPolicy } from '../functions/api/manage/ops/policies.js';
 import { v3ReadEnabled, v3UploadEnabled } from '../functions/core/config.js';
@@ -170,6 +170,47 @@ describe('read, delete, and queue recovery', () => {
     await executeStorageJob(app, {}, { operation: 'DELETE_REPLICA' }, repository.file, null);
     assert.equal(repository.file.status, 'deleted');
   });
+
+  it('turns a verified missing or corrupt replica into a deferred repair job', async () => {
+    for (const failure of [{ code: 'NOT_FOUND', expected: 'missing' }, { code: 'CHECKSUM_MISMATCH', expected: 'corrupt' }]) {
+      const target = { id: 'backup', channel_id: 'telegram', status: 'healthy', enabled: 1, health_status: 'healthy', blocked_until: null };
+      const source = { id: 'primary', channel_id: 'webdav', status: 'healthy', enabled: 1, health_status: 'healthy', blocked_until: null };
+      const records = [];
+      const repository = {
+        async updateReplica(_id, patch) { Object.assign(target, patch); },
+        async listReplicas() { return [source, target]; },
+        async getPolicy() { return { auto_repair: 1 }; },
+        async audit(entry) { records.push({ type: 'audit', entry }); },
+      };
+      const app = {
+        repository,
+        adapterFor: async () => ({ async head() { throw Object.assign(new Error(failure.code), { code: failure.code }); } }),
+        storage: { async recomputeFileHealth() { return { status: 'degraded' }; } },
+        health: { async recordFailure() {} },
+        guard: { async assertRepair() {} },
+        jobs: { async create(job) { records.push({ type: 'job', job }); } },
+      };
+      await executeStorageJob(app, {}, { id: `verify-${failure.code}`, operation: 'VERIFY_REPLICA' }, { id: 'file_1', policy_id: 'policy', size: 3, generation: 1 }, target);
+      assert.equal(target.status, failure.expected);
+      assert.equal(records.find(record => record.type === 'job').job.operation, 'REPAIR_REPLICA');
+      assert.ok(records.some(record => record.type === 'audit' && record.entry.action === 'replica.verificationFailed'));
+    }
+  });
+
+  it('does not read a repair source when the destination channel is unavailable', async () => {
+    const source = { id: 'primary', channel_id: 'webdav', status: 'healthy', enabled: 1, health_status: 'healthy', blocked_until: null };
+    const target = { id: 'backup', channel_id: 'telegram', status: 'missing', enabled: 1, health_status: 'offline', blocked_until: null };
+    let sourceOpened = false;
+    const app = {
+      repository: {
+        async listReplicas() { return [source, target]; },
+        async getChannel() { return { id: 'telegram', enabled: 1, health_status: 'offline' }; },
+      },
+      storage: { async openReplica() { sourceOpened = true; return new Response('abc'); } },
+    };
+    await assert.rejects(() => executeStorageJob(app, {}, { operation: 'REPAIR_REPLICA', idempotency_key: 'repair' }, { id: 'file_1', size: 3, generation: 1 }, target), error => error.code === 'CHANNEL_UNAVAILABLE');
+    assert.equal(sourceOpened, false);
+  });
 });
 
 describe('zero-cost controls and security', () => {
@@ -187,6 +228,42 @@ describe('zero-cost controls and security', () => {
     assert.deepEqual(first.map(channel => channel.id), ['channel_1', 'channel_2', 'channel_3', 'channel_4', 'channel_5']);
     assert.deepEqual(second.map(channel => channel.id), ['channel_6', 'channel_7']);
     assert.deepEqual(third.map(channel => channel.id), ['channel_1', 'channel_2', 'channel_3', 'channel_4', 'channel_5']);
+  });
+  it('rotates bounded replica maintenance and schedules idempotent low-cost work', async () => {
+    const replicas = Array.from({ length: 7 }, (_, index) => ({ id: `replica_${index + 1}`, file_id: `file_${index + 1}`, channel_id: 'webdav', file_generation: 1, cursor: index + 1, status: index < 5 ? 'healthy' : 'missing', role: 'primary' }));
+    const repository = {
+      cursor: 0,
+      async getMaintenanceCursor() { return this.cursor; },
+      async listReplicaMaintenanceAfter(cursor, limit) { return replicas.filter(replica => replica.cursor > cursor).slice(0, limit); },
+      async setMaintenanceCursor(_name, cursor) { this.cursor = cursor; },
+    };
+    const first = await selectRotatingReplicaMaintenance(repository, 5);
+    const second = await selectRotatingReplicaMaintenance(repository, 5);
+    assert.deepEqual(first.map(replica => replica.id), ['replica_1', 'replica_2', 'replica_3', 'replica_4', 'replica_5']);
+    assert.deepEqual(second.map(replica => replica.id), ['replica_6', 'replica_7']);
+    const jobs = [];
+    const scheduled = await scheduleReplicaMaintenance({ jobs: { async create(job) { jobs.push(job); } } }, [first[0], second[0]], { V3_REPLICA_VERIFY_INTERVAL_MS: '3600000', V3_REPLICA_REPAIR_INTERVAL_MS: '900000' });
+    assert.equal(scheduled, 2);
+    assert.equal(jobs[0].operation, 'VERIFY_REPLICA');
+    assert.equal(jobs[1].operation, 'REPAIR_REPLICA');
+    assert.match(jobs[0].idempotencyKey, /^maintenance:VERIFY_REPLICA:/);
+  });
+  it('schedules only bounded essential repairs while writes are limited', async () => {
+    const replicas = Array.from({ length: 6 }, (_, index) => ({ id: `replica_${index + 1}`, file_id: `file_${index + 1}`, channel_id: 'telegram', file_generation: 1, cursor: index + 1, status: 'missing', role: 'sync_backup' }));
+    const repository = {
+      cursor: 0,
+      async getMaintenanceCursor() { return this.cursor; },
+      async listCriticalReplicaMaintenanceAfter(cursor, limit) { return replicas.filter(replica => replica.cursor > cursor).slice(0, limit); },
+      async setMaintenanceCursor(_name, cursor) { this.cursor = cursor; },
+    };
+    const first = await selectRotatingCriticalReplicaMaintenance(repository, 5);
+    const second = await selectRotatingCriticalReplicaMaintenance(repository, 5);
+    assert.deepEqual(first.map(replica => replica.id), ['replica_1', 'replica_2', 'replica_3', 'replica_4', 'replica_5']);
+    assert.deepEqual(second.map(replica => replica.id), ['replica_6']);
+    const calls = [];
+    await scheduleReplicaMaintenance({ jobs: { async create(job, options) { calls.push({ job, options }); } } }, first.slice(0, 1), {}, { essentialRepair: true });
+    assert.equal(calls[0].job.operation, 'REPAIR_REPLICA');
+    assert.equal(calls[0].options.essential, true);
   });
   it('returns client errors for malformed management JSON and guard-limited mutations', async () => {
     const malformedChannel = await patchChannel({ request: new Request('https://example.test/api/manage/ops/channels', { method: 'PATCH', body: '{' }), env: {} });

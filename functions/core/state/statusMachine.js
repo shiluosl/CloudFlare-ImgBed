@@ -12,7 +12,7 @@ const FILE_TRANSITIONS = {
 
 const REPLICA_TRANSITIONS = {
   planned: ['uploading', 'retry_wait', 'deleting', 'deleted'],
-  uploading: ['healthy', 'retry_wait', 'permanent_failure', 'deleting'],
+  uploading: ['healthy', 'corrupt', 'retry_wait', 'permanent_failure', 'deleting'],
   healthy: ['uploading', 'suspect', 'missing', 'corrupt', 'deleting'],
   suspect: ['healthy', 'missing', 'corrupt', 'retry_wait', 'deleting'],
   missing: ['uploading', 'healthy', 'retry_wait', 'deleting'],

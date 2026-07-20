@@ -13,7 +13,7 @@ npm.cmd run build
 npx.cmd wrangler deploy --dry-run --config deploy/worker/wrangler.toml
 ```
 
-The unit suite uses mocked WebDAV and Telegram endpoints plus executable local SQLite coverage for the V3 migration files. The separate integration suite exercises `JobService` and the Queue consumer together using a local durable-job model: Queue-send failure followed by cron redispatch, expired leases, duplicate delivery, and tombstone/generation cancellation. Together they cover dual-write success and degraded outcomes, strict and fast modes, idempotency, MIME/extension policy enforcement, read failover, repair scheduling, tombstone generation, read-only protection, endpoint validation, redirect rejection, channel circuit-breaker states, fair rotation of the bounded maintenance health scan, malformed management JSON, Zero Cost Guard management rejections, R2 deployment scanning, and migration execution.
+The unit suite uses mocked WebDAV and Telegram endpoints plus executable local SQLite coverage for the V3 migration files. The separate integration suite exercises `JobService` and the Queue consumer together using a local durable-job model: Queue-send failure followed by cron redispatch, expired leases, duplicate delivery, and tombstone/generation cancellation. Together they cover dual-write success and degraded outcomes, strict and fast modes, idempotency, MIME/extension policy enforcement, read failover, verification failure repair scheduling, tombstone generation, read-only protection, endpoint validation, redirect rejection, channel circuit-breaker states, bounded channel/replica maintenance rotation, `WRITE_LIMITED` essential repair scheduling, malformed management JSON, Zero Cost Guard management rejections, R2 deployment scanning, and migration execution.
 
 ## External contract tests
 
@@ -29,3 +29,5 @@ Run manual/CI contract tests only against dedicated non-production WebDAV and Te
 6. Add an active R2 binding in a disposable config copy and confirm `npm run check:zero-cost` fails.
 7. Mark a job `running` with an expired lease, run scheduled maintenance, and confirm it returns to the bounded D1 redispatch set.
 8. Set a channel to rate-limited and confirm its `blocked_until` timestamp excludes it from read candidates.
+9. Make `head()` report a missing replica, run bounded maintenance at `NORMAL`, and confirm a durable repair job is created from a separate healthy source.
+10. Set protection to `WRITE_LIMITED` and confirm the bounded critical-repair scan only queues a missing primary or sync-backup replica when exactly one readable source remains.

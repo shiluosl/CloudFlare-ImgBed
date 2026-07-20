@@ -12,7 +12,7 @@ Queue is not the source of truth. The fifteen-minute cron calls `redispatchDue(5
 
 ## Many degraded files
 
-Check storage channel authentication, health status, and free-tier protection level. Repair from a healthy replica only; do not bulk download all files. During `WARNING`, `WRITE_LIMITED`, `READ_ONLY`, or `EMERGENCY`, prioritize critical files and deletes.
+Check storage channel authentication, health status, and free-tier protection level. Repair from a healthy replica only; do not bulk download all files. During `WARNING`, `WRITE_LIMITED`, `READ_ONLY`, or `EMERGENCY`, prioritize critical files and deletes. At `WRITE_LIMITED`, normal verification and ordinary repair are paused; the fifteen-minute maintenance run may repair only a missing/corrupt primary or synchronous backup when exactly one readable healthy source remains. At `READ_ONLY` and `EMERGENCY`, resolve the quota condition before attempting repair.
 
 ## Deletion failure
 

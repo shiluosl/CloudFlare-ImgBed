@@ -2,7 +2,7 @@
 
 ## Current phase
 
-Phase 12 and the final deployment and operations hardening follow-up are complete on `feature/zero-cost-dr-v3`. The follow-up closes deployment-binding, legacy-R2 isolation, legacy-KV deployment isolation, rollback-flag, management-surface, transition-audit, durable-Queue, upload-state, and fair bounded maintenance-scan gaps identified in a post-implementation audit.
+Phase 12 and the final deployment and operations hardening follow-up are complete on `feature/zero-cost-dr-v3`. The follow-up closes deployment-binding, legacy-R2 isolation, legacy-KV deployment isolation, rollback-flag, management-surface, transition-audit, durable-Queue, upload-state, fair bounded maintenance-scan, and silent-replica-loss recovery gaps identified in a post-implementation audit.
 
 ## Completed
 
@@ -25,6 +25,8 @@ Phase 12 and the final deployment and operations hardening follow-up are complet
 - Removed the optional KV namespace binding from the V3 deployment generator and deployment workflow; `KV_NAMESPACE_ID` is now rejected both directly and through `WORKER_VARS`, while CI verifies that generated V3 Workers use only `ASSETS`, D1, and Queue bindings.
 - Added `0032_zero_cost_dr_maintenance_state.sql` and a D1-backed rotating health-check cursor. Scheduled maintenance remains bounded to five channels per run but no longer starves channels beyond the first page.
 - Normalized malformed management JSON to `400` and Zero Cost Guard mutation rejections to `503` for channel and policy operations, with handler-level regression coverage.
+- Added `0033_zero_cost_dr_replica_maintenance.sql`, bounded rotating replica-maintenance and critical-repair cursors, low-cost verification discovery, deterministic `missing`/`corrupt` status transitions, deferred auto-repair jobs, and destination-channel write eligibility checks before repair source reads.
+- At `WRITE_LIMITED`, normal verification remains paused while a bounded essential-repair scan may preserve the last readable copy by rebuilding a required primary or synchronous backup only when exactly one healthy source remains.
 
 ## Not completed / deliberate limits
 
@@ -40,7 +42,7 @@ Phase 12 and the final deployment and operations hardening follow-up are complet
 - Final hardening verification passed on 2026-07-21:
   - `node deploy/worker/generate-routes.js`
   - `node scripts/zero-cost-check.mjs`
-  - `npm.cmd test` - 28 passing: 24 unit tests and 4 separate D1-job/Queue integration tests, including executable V3 migration coverage
+  - Final reconciliation verification on 2026-07-21: `npm.cmd test` - 28 unit tests and 4 integration tests passing; `npm.cmd run lint`, `npm.cmd run check:migrations`, `npm.cmd run check:secrets`, `npm.cmd run build`, and binding-free `npx.cmd wrangler deploy --dry-run --config deploy/worker/wrangler.toml` all passed
   - `npm.cmd run lint`
   - `npm.cmd run check:migrations`
   - `npm.cmd run check:secrets`
@@ -67,6 +69,7 @@ Phase 12 and the final deployment and operations hardening follow-up are complet
 - Latest: `test(dr): harden required replica semantics and queue recovery coverage` (see Git history for the immutable commit ID).
 - Latest deployment-isolation patch: `fix(deploy): exclude KV from zero-cost V3 Worker bindings` (see Git history for the immutable commit ID).
 - Latest operations hardening patch: `b6a0c51` `fix(ops): rotate bounded health checks and normalize management errors`.
+- Latest reconciliation patch: `feat(repair): add bounded replica reconciliation`.
 
 ## Key decisions
 
@@ -83,7 +86,7 @@ Phase 12 and the final deployment and operations hardening follow-up are complet
 
 ## Next actions
 
-1. Apply `0030_zero_cost_dr_v3.sql`, `0031_zero_cost_dr_health_leases.sql`, and then `0032_zero_cost_dr_maintenance_state.sql` to an operator-owned D1 database before a real deployment.
+1. Apply `0030_zero_cost_dr_v3.sql`, `0031_zero_cost_dr_health_leases.sql`, `0032_zero_cost_dr_maintenance_state.sql`, and then `0033_zero_cost_dr_replica_maintenance.sql` to an operator-owned D1 database before a real deployment.
 2. Configure dedicated non-production WebDAV and Telegram credentials before external end-to-end tests.
 
 ## Known limits

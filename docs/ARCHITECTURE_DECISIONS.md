@@ -59,3 +59,9 @@ The strict zero-cost V3 resource allowlist is limited to Workers, D1, Queues, st
 ## ADR-015: Maintenance uses a D1 rotation cursor
 
 Health probes must be bounded to preserve free-tier capacity, but a fixed first-page query can starve later channels indefinitely. `maintenance_state` stores only a named numeric cursor in D1. Each eligible scheduled run probes at most five channels after that cursor and wraps to the first page only after reaching the end. This gives every channel eventual lightweight assessment without KV, Durable Objects, whole-table scans, or high-frequency probing.
+
+## ADR-016: Replica reconciliation is bounded and repair-driven
+
+At `NORMAL`, scheduled maintenance reads at most five eligible replicas through a separate `replica_maintenance_cursor`. Healthy and suspect replicas receive low-cost `head()` verification no more often than the configured verification interval. Planned, missing, corrupt, and retry-wait replicas receive durable create or repair work using time-bucketed idempotency keys. A definitive `NOT_FOUND` becomes `missing`; a size mismatch becomes `corrupt`; both recompute logical-file health and schedule a repair only when another readable source exists and the policy permits auto-repair. The target channel is checked for enabled, health, quota, and rate-limit state before source data is opened. This closes silent-loss recovery without full scans, Queue payload growth, or synchronous user-read repair.
+
+At `WRITE_LIMITED`, normal verification and ordinary repair remain paused. A second bounded cursor may schedule only a missing, corrupt, planned, uploading, or retry-wait primary/synchronous-backup replica when the logical file is `degraded` and exactly one readable healthy source remains. Those jobs are explicitly essential for Queue dispatch; they protect the last remaining copy without reopening bulk maintenance.

@@ -34,7 +34,7 @@ Channel records save only secret reference names, such as `WEBDAV_PASSWORD` or `
 
 ## Apply migrations
 
-Back up/export D1 before applying production migrations. All V3 migrations are additive and must be applied in numeric order: `0030_zero_cost_dr_v3.sql`, `0031_zero_cost_dr_health_leases.sql`, then `0032_zero_cost_dr_maintenance_state.sql`.
+Back up/export D1 before applying production migrations. All V3 migrations are additive and must be applied in numeric order: `0030_zero_cost_dr_v3.sql`, `0031_zero_cost_dr_health_leases.sql`, `0032_zero_cost_dr_maintenance_state.sql`, then `0033_zero_cost_dr_replica_maintenance.sql`.
 
 ```powershell
 npx.cmd wrangler d1 migrations apply cloudflare-imgbed-zero-cost --local --config deploy/worker/wrangler.toml
@@ -54,7 +54,7 @@ npx.cmd wrangler deploy --dry-run --config deploy/worker/wrangler.toml
 npm.cmd run deploy:worker
 ```
 
-The checked-in cron triggers redispatch due D1 jobs every 15 minutes and performs bounded light channel health checks only while protection is `NORMAL`. The D1-backed cursor rotates the bounded scan across enabled channels without KV or Durable Objects.
+The checked-in cron triggers redispatch of due D1 jobs every 15 minutes. At `NORMAL`, D1-backed cursors rotate bounded light channel checks and low-cost replica `head()` verification without KV or Durable Objects. At `WRITE_LIMITED`, verification remains paused while a separate bounded scan may enqueue only essential primary/synchronous-backup repairs that preserve the last readable copy.
 
 ## Free-tier checklist
 

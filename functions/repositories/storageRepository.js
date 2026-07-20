@@ -107,6 +107,50 @@ export class StorageRepository {
   }
   async listReplicas(fileId) { return all(this.db.prepare(`SELECT r.*, c.provider, c.priority, c.health_status, c.enabled
       FROM file_replicas r JOIN storage_channels c ON c.id=r.channel_id WHERE r.file_id=? ORDER BY CASE r.role WHEN 'primary' THEN 0 ELSE 1 END, c.priority`).bind(fileId)); }
+  async listReplicaMaintenanceAfter(cursor, limit = 5, verifyBefore = now()) {
+    const safeCursor = Number(cursor) || 0;
+    const safeLimit = Math.min(Math.max(Number(limit) || 5, 1), 10);
+    return all(this.db.prepare(`SELECT r.rowid AS cursor, r.*, f.generation AS file_generation, f.status AS file_status,
+        f.policy_id, c.enabled, c.health_status, c.blocked_until
+      FROM file_replicas r
+      JOIN files_v3 f ON f.id=r.file_id
+      JOIN storage_channels c ON c.id=r.channel_id
+      WHERE r.rowid > ?
+        AND r.generation=f.generation
+        AND f.status IN ('receiving','replicating','available','degraded','failed')
+        AND r.status IN ('planned','uploading','healthy','suspect','missing','corrupt','retry_wait')
+        AND c.enabled=1
+        AND c.health_status NOT IN ('offline','disabled','quota_blocked')
+        AND (c.blocked_until IS NULL OR c.blocked_until <= ?)
+        AND (r.status NOT IN ('healthy','suspect') OR r.last_checked_at IS NULL OR r.last_checked_at <= ?)
+      ORDER BY r.rowid LIMIT ?`).bind(safeCursor, now(), Number(verifyBefore), safeLimit));
+  }
+  async listCriticalReplicaMaintenanceAfter(cursor, limit = 5) {
+    const safeCursor = Number(cursor) || 0;
+    const safeLimit = Math.min(Math.max(Number(limit) || 5, 1), 10);
+    return all(this.db.prepare(`SELECT r.rowid AS cursor, r.*, f.generation AS file_generation, f.status AS file_status,
+        f.policy_id, c.enabled, c.health_status, c.blocked_until
+      FROM file_replicas r
+      JOIN files_v3 f ON f.id=r.file_id
+      JOIN storage_channels c ON c.id=r.channel_id
+      WHERE r.rowid > ?
+        AND r.generation=f.generation
+        AND f.status='degraded'
+        AND r.role IN ('primary','sync_backup')
+        AND r.status IN ('planned','uploading','missing','corrupt','retry_wait')
+        AND c.enabled=1
+        AND c.health_status NOT IN ('offline','disabled','quota_blocked')
+        AND (c.blocked_until IS NULL OR c.blocked_until <= ?)
+        AND (SELECT COUNT(*) FROM file_replicas source
+          JOIN storage_channels source_channel ON source_channel.id=source.channel_id
+          WHERE source.file_id=f.id
+            AND source.generation=f.generation
+            AND source.status='healthy'
+            AND source_channel.enabled=1
+            AND source_channel.health_status NOT IN ('offline','disabled','quota_blocked')
+            AND (source_channel.blocked_until IS NULL OR source_channel.blocked_until <= ?))=1
+      ORDER BY r.rowid LIMIT ?`).bind(safeCursor, now(), now(), safeLimit));
+  }
   async getReplica(id) { return first(this.db.prepare('SELECT * FROM file_replicas WHERE id=?').bind(id)); }
   async switchPrimaryReplica(fileId, replicaId) {
     const replica = await this.getReplica(replicaId);
@@ -176,6 +220,17 @@ export class StorageRepository {
     await this.db.prepare(`UPDATE storage_jobs SET status='retry_wait', attempts=CASE WHEN attempts > 0 THEN attempts - 1 ELSE 0 END,
       lease_until=NULL, run_after=?, last_error_code='ZERO_COST_GUARD', last_error_message=?, updated_at=? WHERE id=?`)
       .bind(Date.now() + 15 * 60 * 1000, `Paused at protection level ${level || 'UNKNOWN'}`, now(), id).run();
+    return this.getJob(id);
+  }
+  async deferJobForChannel(id, channel) {
+    const current = await this.getJob(id);
+    if (!current) return null;
+    await this.assertTransition('job', current, 'retry_wait', assertJobTransition);
+    const blockedUntil = Number(channel?.blocked_until || 0);
+    const runAfter = blockedUntil > now() ? blockedUntil : now() + 15 * 60 * 1000;
+    await this.db.prepare(`UPDATE storage_jobs SET status='retry_wait', attempts=CASE WHEN attempts > 0 THEN attempts - 1 ELSE 0 END,
+      lease_until=NULL, run_after=?, last_error_code='CHANNEL_UNAVAILABLE', last_error_message=?, updated_at=? WHERE id=?`)
+      .bind(runAfter, 'Destination channel is not currently writable', now(), id).run();
     return this.getJob(id);
   }
   async createTombstone(fileId, expectedGeneration, actorId, reason) {
