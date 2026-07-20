@@ -47,3 +47,7 @@ The repository does not commit a D1 database identifier or Queue name. `npm run 
 ## ADR-012: Historical R2 paths are isolated and V3 has independent rollback flags
 
 Upstream legacy code still contains historical R2 behavior for compatibility. In Zero-Cost mode the generated Worker exposes a proxy environment that hides `img_r2` and `R2`, and it rejects the historical `uploadChannel=cfr2` request before routing. V3 upload and V3 logical read have independent `ENABLE_V3_UPLOAD` and `ENABLE_V3_READ` flags, so an operator can pause new logical uploads or roll reads back to the legacy route surface without enabling R2 or changing paid-resource configuration.
+
+## ADR-013: Availability requires the required synchronous replicas
+
+`available` means the primary and synchronous backup are healthy. Healthy asynchronous replicas remain useful for repair and read recovery, but they cannot hide a failed required backup. Upload preflight also rejects a policy whose required channel is already disabled, offline, or quota-blocked before creating the logical file record. V3 uploads enforce a bounded MIME-to-extension policy; environment variables can narrow the default set, while new MIME families require an explicit code review and mapping.

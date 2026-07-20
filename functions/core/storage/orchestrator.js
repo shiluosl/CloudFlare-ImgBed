@@ -11,8 +11,15 @@ export class StorageOrchestrator {
     catch (error) { await this.repository.updateReplica(replica.id, { status: 'retry_wait', last_error_code: error.code || 'UNKNOWN', last_error_message: safeErrorMessage(error) }); await this.healthService?.recordFailure(channel, error); return { replica: await this.repository.getReplica(replica.id), error }; }
   }
   async recomputeFileHealth(fileId) {
-    const file = await this.repository.getFile(fileId); const replicas = await this.repository.listReplicas(fileId); const healthy = replicas.filter(replica => replica.status === 'healthy').length;
-    let status = healthy >= 2 ? 'available' : healthy === 1 ? 'degraded' : 'failed'; if (file.status === 'deleting' || file.status === 'deleted') return file;
+    const file = await this.repository.getFile(fileId); const replicas = await this.repository.listReplicas(fileId);
+    const required = replicas.filter(replica => ['primary', 'sync_backup'].includes(replica.role));
+    const healthyRequired = required.filter(replica => replica.status === 'healthy').length;
+    const healthyAny = replicas.filter(replica => replica.status === 'healthy').length;
+    // Optional asynchronous copies improve recoverability but cannot mask a missing synchronous backup.
+    const status = required.length > 1 && healthyRequired === required.length
+      ? 'available'
+      : healthyAny > 0 ? 'degraded' : 'failed';
+    if (file.status === 'deleting' || file.status === 'deleted') return file;
     return this.repository.updateFileStatus(fileId, status);
   }
   async readCandidates(fileId) {

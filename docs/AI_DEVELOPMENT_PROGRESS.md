@@ -2,7 +2,7 @@
 
 ## Current phase
 
-Phase 12 and the final deployment and operations hardening follow-up are complete on `feature/zero-cost-dr-v3`. The follow-up closes deployment-binding, legacy-R2 isolation, rollback-flag, management-surface, and transition-audit gaps identified in a post-implementation audit.
+Phase 12 and the final deployment and operations hardening follow-up are complete on `feature/zero-cost-dr-v3`. The follow-up closes deployment-binding, legacy-R2 isolation, rollback-flag, management-surface, transition-audit, durable-Queue, and upload-state gaps identified in a post-implementation audit.
 
 ## Completed
 
@@ -18,6 +18,10 @@ Phase 12 and the final deployment and operations hardening follow-up are complet
 - Added recovery transitions for repaired files/replicas, D1 recovery of expired `running` jobs, and explicit guard policies for delete, repair, verification, async copies, and Queue dispatch.
 - Removed V3 adapter fallback to plaintext channel credentials, reject external redirects, validate Telegram proxy URLs, and redact remote object metadata from operations APIs.
 - Added executable SQLite migration coverage and channel health/circuit-breaker regression tests.
+- Split local unit and integration commands. The integration suite directly verifies D1-job/Queue recovery behavior for Queue-send failure, cron redispatch, expired leases, duplicate delivery, and tombstone cancellation.
+- Preflight required synchronous channels before file creation, so an already offline/disabled/quota-blocked channel cannot leave an orphaned `receiving` file.
+- Defined `available` using the primary plus synchronous backup only; optional async copies cannot mask a missing required replica.
+- Added a bounded V3 MIME/extension policy, with environment variables that can narrow the reviewed default set.
 
 ## Not completed / deliberate limits
 
@@ -33,7 +37,7 @@ Phase 12 and the final deployment and operations hardening follow-up are complet
 - Final hardening verification passed on 2026-07-21:
   - `node deploy/worker/generate-routes.js`
   - `node scripts/zero-cost-check.mjs`
-  - `npm.cmd test` - 19 passing, including executable V3 migration coverage
+  - `npm.cmd test` - 26 passing: 22 unit tests and 4 separate D1-job/Queue integration tests, including executable V3 migration coverage
   - `npm.cmd run lint`
   - `npm.cmd run check:migrations`
   - `npm.cmd run check:secrets`
@@ -57,6 +61,7 @@ Phase 12 and the final deployment and operations hardening follow-up are complet
 - `5855321` `fix(deploy): require D1 and Queue bindings for V3 worker`
 - `0cf5790` `fix(core): harden V3 rollback and state auditing`
 - `d661fa4` `feat(admin): expand zero-cost storage operations`
+- Latest: `test(dr): harden required replica semantics and queue recovery coverage` (see Git history for the immutable commit ID).
 
 ## Key decisions
 
@@ -73,9 +78,8 @@ Phase 12 and the final deployment and operations hardening follow-up are complet
 
 ## Next actions
 
-1. Push `feature/zero-cost-dr-v3` after local review.
-2. Apply `0030_zero_cost_dr_v3.sql` and then `0031_zero_cost_dr_health_leases.sql` to an operator-owned D1 database before a real deployment.
-3. Configure dedicated non-production WebDAV and Telegram credentials before external end-to-end tests.
+1. Apply `0030_zero_cost_dr_v3.sql` and then `0031_zero_cost_dr_health_leases.sql` to an operator-owned D1 database before a real deployment.
+2. Configure dedicated non-production WebDAV and Telegram credentials before external end-to-end tests.
 
 ## Known limits
 

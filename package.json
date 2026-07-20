@@ -5,9 +5,9 @@
   "scripts": {
     "ci-test": "concurrently --kill-others \"npm start\" \"wait-on http://localhost:8080 && mocha\"",
     "ci-test:docker": "concurrently --kill-others \"npm run start:docker\" \"wait-on http://localhost:8080 && mocha\"",
-    "test": "mocha \"test/**/*.test.js\"",
-    "test:unit": "npm run test",
-    "test:integration": "npm run test",
+    "test": "npm run test:unit && npm run test:integration",
+    "test:unit": "mocha \"test/*.test.js\"",
+    "test:integration": "mocha \"test/integration/**/*.test.js\"",
     "lint": "node scripts/zero-cost-check.mjs",
     "build": "node deploy/worker/generate-routes.js",
     "check:zero-cost": "node scripts/zero-cost-check.mjs",

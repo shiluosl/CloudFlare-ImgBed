@@ -9,3 +9,6 @@ WEBDAV_USERNAME=replace-with-webdav-username
 WEBDAV_PASSWORD=replace-with-webdav-password
 TELEGRAM_BOT_TOKEN=replace-with-telegram-token
 TURNSTILE_SECRET_KEY=replace-only-when-anonymous-upload-is-enabled
+# Optional comma-separated V3 upload policy. It can narrow the bounded default set of common file types.
+V3_ALLOWED_MIME_TYPES=image/jpeg,image/png,image/gif,image/webp,image/avif,image/svg+xml,application/pdf,text/plain,application/json,application/zip,application/gzip,video/mp4,audio/mpeg,application/octet-stream
+V3_ALLOWED_EXTENSIONS=jpg,jpeg,png,gif,webp,avif,svg,pdf,txt,log,md,csv,json,zip,gz,mp4,mp3,bin,dat

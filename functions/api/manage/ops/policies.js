@@ -54,7 +54,7 @@ export async function onRequestPatch({ request, env }) {
 }
 
 async function validatePolicy(repository, body) {
-  if (!body.name || !body.primaryChannelId) return 'name and primaryChannelId are required';
+  if (!body.name || !body.primaryChannelId || !body.syncBackupChannelId) return 'name, primaryChannelId, and syncBackupChannelId are required';
   if (!['safe', 'strict', 'fast'].includes(body.writeMode || 'safe')) return 'Unsupported writeMode';
   if (body.syncBackupChannelId && body.syncBackupChannelId === body.primaryChannelId) return 'Primary and sync backup channels must differ';
   const ids = [body.primaryChannelId, body.syncBackupChannelId, ...(body.asyncChannelIds || [])].filter(Boolean);

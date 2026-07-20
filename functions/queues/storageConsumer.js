@@ -1,8 +1,8 @@
 import { runtime } from '../core/runtime.js';
 import { getAdapter } from '../core/storage/registry.js';
 
-export async function consumeStorageJobs(batch, env) {
-  const app = runtime(env);
+export async function consumeStorageJobs(batch, env, appFactory = runtime) {
+  const app = appFactory(env);
   for (const message of batch.messages) {
     const job = await app.repository.claimJob(message.body?.jobId);
     if (!job) {

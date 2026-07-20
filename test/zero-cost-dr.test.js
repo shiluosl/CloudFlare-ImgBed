@@ -15,6 +15,7 @@ import { inspectZeroCostFiles } from '../scripts/zero-cost-check.mjs';
 import { hasSensitiveConfig } from '../functions/api/manage/ops/channels.js';
 import { ChannelHealthService } from '../functions/core/health/channelHealthService.js';
 import { v3ReadEnabled, v3UploadEnabled } from '../functions/core/config.js';
+import { StorageOrchestrator } from '../functions/core/storage/orchestrator.js';
 import { execFileSync } from 'node:child_process';
 import { readFileSync, writeFileSync } from 'node:fs';
 
@@ -91,6 +92,38 @@ describe('upload disaster recovery workflow', () => {
     assert.equal(result.replicas.filter(replica => replica.role === 'async_backup')[0].status, 'planned');
     assert.equal(jobs.records.length, 1);
     assert.equal(jobs.records[0].operation, 'CREATE_REPLICA');
+  });
+
+  it('rejects an unavailable synchronous channel before creating a logical file', async () => {
+    const repo = new UploadMemoryRepository();
+    repo.channels.set('telegram', { id: 'telegram', enabled: 1, health_status: 'offline' });
+    const guard = { limits: { HARD_MAX_UPLOAD_BYTES: 20 * 1024 * 1024, MAX_UPLOAD_BYTES: 10 * 1024 * 1024, MAX_SYNC_CHANNELS: 2 }, async assertWrite() {}, async assertRepair() {}, async assertAsyncReplica() {}, async record() {} };
+    const service = new UploadService(repo, guard, { ZERO_COST_MODE: 'true' }, null);
+
+    await assert.rejects(() => service.upload({ policyId: 'policy', idempotencyKey: 'offline-sync', name: 'demo.txt', contentType: 'text/plain', size: 3, body: new Blob(['abc']), admin: true }), /not writable/);
+    assert.equal(repo.files.size, 0);
+  });
+
+  it('requires an allowed MIME type and matching filename extension', async () => {
+    const repo = new UploadMemoryRepository();
+    const guard = { limits: { HARD_MAX_UPLOAD_BYTES: 20 * 1024 * 1024, MAX_UPLOAD_BYTES: 10 * 1024 * 1024, MAX_SYNC_CHANNELS: 2 }, async assertWrite() {}, async assertRepair() {}, async assertAsyncReplica() {}, async record() {} };
+    const service = new UploadService(repo, guard, { ZERO_COST_MODE: 'true' }, null);
+    await assert.rejects(() => service.upload({ policyId: 'policy', idempotencyKey: 'mismatched-type', name: 'unsafe.exe', contentType: 'text/plain', size: 3, body: new Blob(['abc']), admin: true }), error => error.status === 415);
+    assert.equal(repo.files.size, 0);
+  });
+
+  it('does not let an optional async replica make a missing sync backup available', async () => {
+    const repository = {
+      async getFile() { return { id: 'file_1', status: 'receiving' }; },
+      async listReplicas() { return [
+        { id: 'primary', role: 'primary', status: 'healthy' },
+        { id: 'sync', role: 'sync_backup', status: 'retry_wait' },
+        { id: 'async', role: 'async_backup', status: 'healthy' },
+      ]; },
+      async updateFileStatus(_id, status) { return { status }; },
+    };
+    const result = await new StorageOrchestrator(repository, {}).recomputeFileHealth('file_1');
+    assert.equal(result.status, 'degraded');
   });
 });
 
@@ -197,13 +230,13 @@ describe('zero-cost controls and security', () => {
 });
 
 class UploadMemoryRepository {
-  constructor() { this.files = new Map(); this.replicas = new Map(); this.policy = { id: 'policy', enabled: 1, primary_channel_id: 'webdav', sync_backup_channel_id: 'telegram', write_mode: 'safe' }; }
+  constructor() { this.files = new Map(); this.replicas = new Map(); this.channels = new Map([['webdav', { id: 'webdav', enabled: 1, health_status: 'healthy' }], ['telegram', { id: 'telegram', enabled: 1, health_status: 'healthy' }]]); this.policy = { id: 'policy', enabled: 1, primary_channel_id: 'webdav', sync_backup_channel_id: 'telegram', write_mode: 'safe' }; }
   async getFileByIdempotency(key) { return [...this.files.values()].find(file => file.idempotency_key === key) || null; }
   async getPolicy() { return this.policy; }
   async createFileWithReplicas(file, specs) { const row = { ...file, idempotency_key: file.idempotencyKey, generation: 1 }; this.files.set(row.id, row); specs.forEach(spec => this.replicas.set(spec.id, { id: spec.id, file_id: row.id, channel_id: spec.channelId, role: spec.role, object_key: spec.objectKey, status: 'planned' })); return row; }
   async listReplicas(fileId) { return [...this.replicas.values()].filter(item => item.file_id === fileId); }
   async getReplica(id) { return this.replicas.get(id); }
-  async getChannel(id) { return { id, provider: id, config_json: '{}', secret_refs_json: '{}', enabled: 1, health_status: 'healthy' }; }
+  async getChannel(id) { return { provider: id, config_json: '{}', secret_refs_json: '{}', ...this.channels.get(id) }; }
   async updateReplica(id, patch) { const replica = this.replicas.get(id); Object.assign(replica, patch); return replica; }
   async updateFileStatus(id, status) { const file = this.files.get(id); file.status = status; return file; }
 }
