@@ -10,10 +10,16 @@ const required = [
   ['.github/workflows/deploy-worker.yml', /R2_BUCKET_NAME/i, 'Deployment workflow passes an R2 setting'],
   ['wrangler.toml.example', /r2_buckets/i, 'Example Worker configuration declares an R2 binding'],
 ];
-const forbidden = [/workers_ai/i, /vectorize/i, /browser[_ -]?rendering/i, /\bcontainers\b/i];
+const forbiddenBinding = [
+  /\bworkers_ai\s*=|\bai\s*=/i,
+  /\bvectorize\s*=/i,
+  /browser[_ -]?rendering\s*=/i,
+  /\bcontainers\s*=/i,
+];
 const activeSourceChecks = [
   ['functions/core/storage/registry.js', /provider\s*===\s*['"]r2['"]\s*&&\s*!r2Allowed/i, 'V3 adapter registry must reject R2'],
   ['deploy/worker/index.js', /r2_buckets/i, 'Generated Worker declares an R2 binding'],
+  ['deploy/worker/index.js', /zeroCostEnvironment[\s\S]*property === 'img_r2'/i, 'Generated Worker must hide legacy R2 bindings in Zero-Cost mode'],
 ];
 export function inspectZeroCostFiles(baseDir = root) {
   const read = file => {
@@ -24,14 +30,16 @@ export function inspectZeroCostFiles(baseDir = root) {
   for (const [file, pattern, message] of required) {
     if (pattern.test(read(file))) failures.push(`${message}: ${file}`);
   }
-  for (const file of ['deploy/worker/wrangler.toml', 'deploy/worker/generate-toml.js']) {
-    for (const pattern of forbidden) {
+  for (const file of ['deploy/worker/wrangler.toml', 'deploy/worker/generate-toml.js', 'wrangler.toml.example']) {
+    for (const pattern of forbiddenBinding) {
       if (pattern.test(read(file))) failures.push(`Forbidden paid Cloudflare resource in ${file}: ${pattern}`);
     }
   }
   for (const [file, pattern, message] of activeSourceChecks) {
     const content = read(file);
     if (file.endsWith('registry.js')) {
+      if (!pattern.test(content)) failures.push(`${message}: ${file}`);
+    } else if (file.endsWith('index.js') && /must hide legacy/.test(message)) {
       if (!pattern.test(content)) failures.push(`${message}: ${file}`);
     } else if (pattern.test(content)) failures.push(`${message}: ${file}`);
   }

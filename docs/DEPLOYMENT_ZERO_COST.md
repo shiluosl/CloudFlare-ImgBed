@@ -11,7 +11,13 @@ npx.cmd wrangler d1 create cloudflare-imgbed-zero-cost
 npx.cmd wrangler queues create imgbed-storage-zero-cost
 ```
 
-Copy `wrangler.toml.example` values into the generated deployment configuration or set `D1_DATABASE_ID` and `STORAGE_QUEUE_NAME` for `deploy/worker/generate-toml.js`. There must be no R2 binding.
+The checked-in `deploy/worker/wrangler.toml` is intentionally CI-safe and has no account-specific identifiers. Before a real deployment, set the following shell variables. `npm run deploy:worker` regenerates the file and refuses to deploy unless both V3 bindings are present. There must be no R2 binding.
+
+```powershell
+$env:D1_DATABASE_ID = "the-id-returned-by-wrangler-d1-create"
+$env:D1_DATABASE_NAME = "cloudflare-imgbed-zero-cost"
+$env:STORAGE_QUEUE_NAME = "imgbed-storage-zero-cost"
+```
 
 ## Configure secrets
 
@@ -45,7 +51,7 @@ npm.cmd run check:secrets
 npm.cmd test
 npm.cmd run build
 npx.cmd wrangler deploy --dry-run --config deploy/worker/wrangler.toml
-npx.cmd wrangler deploy --config deploy/worker/wrangler.toml
+npm.cmd run deploy:worker
 ```
 
 The checked-in cron triggers redispatch due D1 jobs every 15 minutes and perform bounded light channel health checks only while protection is `NORMAL`.

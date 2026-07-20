@@ -330,6 +330,28 @@ function isCacheLookupRequest(request) {
     return request.method === 'GET' || request.method === 'HEAD';
 }
 
+function zeroCostEnabled(env) {
+    const value = env.ZERO_COST_MODE;
+    return value === undefined || value === null || value === '' || String(value).toLowerCase() === 'true';
+}
+
+function zeroCostEnvironment(env) {
+    if (!zeroCostEnabled(env)) return env;
+    // Legacy routes may still reference img_r2. Never expose an R2 binding to
+    // them in a zero-cost Worker, even if an operator accidentally adds one.
+    return new Proxy(env, {
+        get(target, property, receiver) {
+            if (property === 'img_r2' || property === 'R2') return undefined;
+            return Reflect.get(target, property, receiver);
+        },
+    });
+}
+
+function isForbiddenZeroCostRequest(request, url, env) {
+    if (!zeroCostEnabled(env)) return false;
+    return url.pathname === '/upload' && url.searchParams.get('uploadChannel') === 'cfr2';
+}
+
 // 只写入完整 GET 响应，Range 请求仅尝试命中已有完整缓存
 function isCacheStoreRequest(request) {
     return request.method === 'GET' && !request.headers.has('Range');
@@ -393,6 +415,12 @@ export default {
         const url = new URL(request.url);
         const pathname = url.pathname;
 
+        if (isForbiddenZeroCostRequest(request, url, env)) {
+            return new Response('Cloudflare R2 is disabled in Zero-Cost mode', { status: 403 });
+        }
+
+        const runtimeEnv = zeroCostEnvironment(env);
+
         const matched = matchRoute(pathname);
 
         if (!matched) {
@@ -430,7 +458,7 @@ export default {
 
         const context = {
             request,
-            env,
+            env: runtimeEnv,
             params,
             functionPath: route.path.endsWith('/') && route.path !== '/'
                 ? route.path.slice(0, -1)
@@ -445,11 +473,11 @@ export default {
     },
     async queue(batch, env, ctx) {
         if (env.STORAGE_QUEUE) {
-            return consumeStorageJobs(batch, env, ctx);
+            return consumeStorageJobs(batch, zeroCostEnvironment(env), ctx);
         }
     },
     async scheduled(controller, env, ctx) {
-        ctx.waitUntil(runMaintenance(env));
+        ctx.waitUntil(runMaintenance(zeroCostEnvironment(env)));
     },
 };
 `;

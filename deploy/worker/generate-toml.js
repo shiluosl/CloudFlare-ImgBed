@@ -10,9 +10,10 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const outputPath = join(__dirname, 'wrangler.toml');
 const env = process.env;
 const name = env.WORKER_NAME || 'cloudflare-imgbed';
+const requireBindings = process.argv.includes('--require-bindings') || env.REQUIRE_STORAGE_BINDINGS === 'true';
 
-if (env.R2_BUCKET_NAME) {
-  throw new Error('R2_BUCKET_NAME is forbidden by the Zero-Cost deployment generator');
+if (Object.keys(env).some(key => /(^|_)R2(_|$)|WORKERS_AI|VECTORIZ|BROWSER.*RENDER|CONTAINERS/i.test(key))) {
+  throw new Error('A paid Cloudflare resource setting is forbidden by the Zero-Cost deployment generator');
 }
 
 const extraVars = parseWorkerVars(env.WORKER_VARS);
@@ -32,6 +33,8 @@ not_found_handling = "single-page-application"
 ZERO_COST_MODE = "true"
 ALLOW_R2 = "false"
 ENABLE_REPLICATION_V3 = "true"
+ENABLE_V3_UPLOAD = "true"
+ENABLE_V3_READ = "true"
 MAX_UPLOAD_BYTES = "10485760"
 HARD_MAX_UPLOAD_BYTES = "20971520"
 MAX_SYNC_CHANNELS = "2"
@@ -43,11 +46,17 @@ QUEUE_OPS_SOFT_LIMIT = "7000"
 ${extraVarToml}
 `;
 
-if (env.D1_DATABASE_ID) {
+const hasD1Binding = Boolean(env.D1_DATABASE_ID);
+const hasQueueBinding = Boolean(env.STORAGE_QUEUE_NAME);
+if (requireBindings && (!hasD1Binding || !hasQueueBinding)) {
+  throw new Error('D1_DATABASE_ID and STORAGE_QUEUE_NAME are required for a V3 Worker deployment');
+}
+
+if (hasD1Binding) {
   toml += `
 [[d1_databases]]
 binding = "DB"
-database_name = "cloudflare-imgbed-zero-cost"
+database_name = "${escapeToml(env.D1_DATABASE_NAME || 'cloudflare-imgbed-zero-cost')}"
 database_id = "${escapeToml(env.D1_DATABASE_ID)}"
 migrations_dir = "../../database/migrations"
 `;
@@ -61,7 +70,7 @@ id = "${escapeToml(env.KV_NAMESPACE_ID)}"
 `;
 }
 
-if (env.STORAGE_QUEUE_NAME) {
+if (hasQueueBinding) {
   const queue = escapeToml(env.STORAGE_QUEUE_NAME);
   toml += `
 [[queues.producers]]
@@ -96,9 +105,14 @@ function parseWorkerVars(raw) {
   if (!raw) return {};
   try {
     const vars = JSON.parse(raw);
+    for (const key of Object.keys(vars)) {
+      if (['ZERO_COST_MODE', 'ALLOW_R2'].includes(key)) continue;
+      if (/(^|_)R2(_|$)|WORKERS_AI|VECTORIZ|BROWSER.*RENDER|CONTAINERS/i.test(key)) {
+        throw new Error(`WORKER_VARS contains forbidden key ${key}`);
+      }
+    }
     return Object.fromEntries(Object.entries(vars).filter(([key]) => !['ZERO_COST_MODE', 'ALLOW_R2'].includes(key)));
   } catch (error) {
-    console.error(`WORKER_VARS is not valid JSON; skipping it: ${error.message}`);
-    return {};
+    throw new Error(`WORKER_VARS is invalid: ${error.message}`);
   }
 }
