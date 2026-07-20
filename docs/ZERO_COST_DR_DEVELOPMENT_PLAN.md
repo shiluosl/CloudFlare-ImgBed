@@ -1,13 +1,13 @@
 # CloudFlare-ImgBed 零费用多渠道备份容灾重构开发文档
 
-> 文档版本：1.0  
-> 目标版本：CloudFlare-ImgBed Zero-Cost DR V3  
-> 基线项目：MarSeventh/CloudFlare-ImgBed  
-> 基线版本：v2.7.5（2026-07-15）  
-> 编写日期：2026-07-20  
-> 部署目标：Cloudflare Free Plan  
-> 第一优先级：Cloudflare 侧不产生任何账单  
-> 第二优先级：多渠道备份、读取容灾、自动修复  
+> 文档版本：1.0
+> 目标版本：CloudFlare-ImgBed Zero-Cost DR V3
+> 基线项目：MarSeventh/CloudFlare-ImgBed
+> 基线版本：v2.7.5（2026-07-15）
+> 编写日期：2026-07-20
+> 部署目标：Cloudflare Free Plan
+> 第一优先级：Cloudflare 侧不产生任何账单
+> 第二优先级：多渠道备份、读取容灾、自动修复
 > 推荐保存路径：`docs/ZERO_COST_DR_DEVELOPMENT_PLAN.md`
 
 ---
@@ -2710,34 +2710,34 @@ R2
 
 核对日期：2026-07-20
 
-1. Cloudflare Workers Limits  
+1. Cloudflare Workers Limits
    https://developers.cloudflare.com/workers/platform/limits/
 
-2. Cloudflare Workers Pricing  
+2. Cloudflare Workers Pricing
    https://developers.cloudflare.com/workers/platform/pricing/
 
-3. Cloudflare D1 Pricing  
+3. Cloudflare D1 Pricing
    https://developers.cloudflare.com/d1/platform/pricing/
 
-4. Cloudflare D1 Limits  
+4. Cloudflare D1 Limits
    https://developers.cloudflare.com/d1/platform/limits/
 
-5. Cloudflare Queues Pricing  
+5. Cloudflare Queues Pricing
    https://developers.cloudflare.com/queues/platform/pricing/
 
-6. Cloudflare Queues Limits  
+6. Cloudflare Queues Limits
    https://developers.cloudflare.com/queues/platform/limits/
 
-7. Cloudflare R2 Pricing  
+7. Cloudflare R2 Pricing
    https://developers.cloudflare.com/r2/pricing/
 
-8. Cloudflare Budget Alerts  
+8. Cloudflare Budget Alerts
    https://developers.cloudflare.com/billing/manage/budget-alerts/
 
-9. Cloudflare Turnstile Plans  
+9. Cloudflare Turnstile Plans
    https://developers.cloudflare.com/turnstile/plans/
 
-10. CloudFlare-ImgBed 上游仓库  
+10. CloudFlare-ImgBed 上游仓库
     https://github.com/MarSeventh/CloudFlare-ImgBed
 
 ---
