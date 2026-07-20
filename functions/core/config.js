@@ -24,3 +24,5 @@ export function limitsFromEnv(env = {}) {
 export function zeroCostEnabled(env = {}) { return isEnabled(env.ZERO_COST_MODE, true); }
 export function r2Allowed(env = {}) { return !zeroCostEnabled(env) && isEnabled(env.ALLOW_R2, false); }
 export function v3Enabled(env = {}) { return isEnabled(env.ENABLE_REPLICATION_V3, true); }
+export function v3UploadEnabled(env = {}) { return v3Enabled(env) && isEnabled(env.ENABLE_V3_UPLOAD, true); }
+export function v3ReadEnabled(env = {}) { return v3Enabled(env) && isEnabled(env.ENABLE_V3_READ, true); }

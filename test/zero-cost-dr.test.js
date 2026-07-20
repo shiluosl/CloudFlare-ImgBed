@@ -14,6 +14,9 @@ import { executeStorageJob, isExecutableStorageJob } from '../functions/queues/s
 import { inspectZeroCostFiles } from '../scripts/zero-cost-check.mjs';
 import { hasSensitiveConfig } from '../functions/api/manage/ops/channels.js';
 import { ChannelHealthService } from '../functions/core/health/channelHealthService.js';
+import { v3ReadEnabled, v3UploadEnabled } from '../functions/core/config.js';
+import { execFileSync } from 'node:child_process';
+import { readFileSync, writeFileSync } from 'node:fs';
 
 describe('zero-cost DR core', () => {
   it('rejects R2 in zero-cost mode', () => {
@@ -24,6 +27,11 @@ describe('zero-cost DR core', () => {
     assert.equal(calculateProtectionLevel({}, limits), 'NORMAL'); assert.equal(calculateProtectionLevel({ uploads: 75 }, limits), 'WARNING'); assert.equal(calculateProtectionLevel({ uploads: 90 }, limits), 'WRITE_LIMITED'); assert.equal(calculateProtectionLevel({ uploads: 100 }, limits), 'READ_ONLY'); assert.equal(calculateProtectionLevel({ uploads: 120 }, limits), 'EMERGENCY');
   });
   it('guards status transitions while allowing controlled recovery', () => { assert.doesNotThrow(() => assertFileTransition('receiving', 'available')); assert.doesNotThrow(() => assertFileTransition('failed', 'available')); assert.throws(() => assertFileTransition('deleted', 'available')); assert.doesNotThrow(() => assertReplicaTransition('planned', 'uploading')); assert.doesNotThrow(() => assertReplicaTransition('missing', 'healthy')); assert.throws(() => assertReplicaTransition('deleted', 'healthy')); assert.doesNotThrow(() => assertJobTransition('pending', 'queued')); assert.throws(() => assertJobTransition('succeeded', 'running')); });
+  it('supports independent V3 read and upload rollback flags', () => {
+    assert.equal(v3ReadEnabled({ ENABLE_REPLICATION_V3: 'true', ENABLE_V3_READ: 'false' }), false);
+    assert.equal(v3UploadEnabled({ ENABLE_REPLICATION_V3: 'true', ENABLE_V3_UPLOAD: 'false' }), false);
+    assert.equal(v3ReadEnabled({ ENABLE_REPLICATION_V3: 'false', ENABLE_V3_READ: 'true' }), false);
+  });
 });
 
 describe('WebDAV adapter contract', () => {
@@ -141,6 +149,20 @@ describe('zero-cost controls and security', () => {
   it('flags active R2 bindings in deployment configuration', () => {
     const base = process.cwd();
     assert.deepEqual(inspectZeroCostFiles(base), []);
+  });
+  it('requires real V3 bindings for a deployment configuration', () => {
+    const path = 'deploy/worker/wrangler.toml';
+    const original = readFileSync(path, 'utf8');
+    try {
+      assert.throws(() => execFileSync(process.execPath, ['deploy/worker/generate-toml.js', '--require-bindings'], { cwd: process.cwd(), stdio: 'pipe' }), /D1_DATABASE_ID and STORAGE_QUEUE_NAME/);
+      const result = execFileSync(process.execPath, ['deploy/worker/generate-toml.js', '--require-bindings'], {
+        cwd: process.cwd(), stdio: 'pipe', env: { ...process.env, D1_DATABASE_ID: '00000000-0000-0000-0000-000000000001', STORAGE_QUEUE_NAME: 'imgbed-storage-zero-cost' },
+      }).toString();
+      assert.match(result, /\[\[d1_databases\]\]/);
+      assert.match(readFileSync(path, 'utf8'), /binding = "STORAGE_QUEUE"/);
+    } finally {
+      writeFileSync(path, original, 'utf8');
+    }
   });
   it('requires storage credentials to be supplied as secret references', () => {
     assert.equal(hasSensitiveConfig({ baseUrl: 'https://storage.example/dav' }), false);

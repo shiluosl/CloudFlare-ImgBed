@@ -14,7 +14,14 @@ export function calculateProtectionLevel(usage = {}, limits) {
 export class ZeroCostGuard {
   constructor(repository, env, clock = () => new Date()) { this.repository = repository; this.env = env; this.clock = clock; this.limits = limitsFromEnv(env); }
   day() { return this.clock().toISOString().slice(0, 10); }
-  async status() { const day = this.day(); const usage = await this.repository.getUsage(day) || { day }; const level = calculateProtectionLevel(usage, this.limits); if (usage.protection_level !== level) { await this.repository.incrementUsage(day, { worker_requests: 0 }); await this.repository.setProtectionLevel(day, level); } return { day, usage, level, limits: this.limits }; }
+  async status() {
+    const day = this.day();
+    const usage = await this.repository.getUsage(day) || { day, protection_level: 'NORMAL' };
+    const level = calculateProtectionLevel(usage, this.limits);
+    // Reading the status panel must not create a usage row or consume a D1 write.
+    if (usage.protection_level !== level && usage.updated_at) await this.repository.setProtectionLevel(day, level);
+    return { day, usage, level, limits: this.limits };
+  }
   async assertWrite({ admin = false, essential = false } = {}) { const { level } = await this.status(); if (level === 'EMERGENCY' || level === 'READ_ONLY') throw forbidden(level, 'Writes are disabled by the Zero-Cost Guard'); if (level === 'WRITE_LIMITED' && !admin && !essential) throw forbidden(level, 'Non-essential writes are disabled by the Zero-Cost Guard'); return level; }
   async assertDelete({ admin = true } = {}) {
     const { level } = await this.status();

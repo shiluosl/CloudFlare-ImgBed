@@ -20,6 +20,7 @@ import {
 import { buildCdnFileUrl } from '../utils/metadata/metadataView.js';
 import { runtime } from '../core/runtime.js';
 import { FileService } from '../core/files/fileService.js';
+import { v3ReadEnabled } from '../core/config.js';
 
 
 export async function onRequest(context) {  // Contents of context object
@@ -42,7 +43,7 @@ export async function onRequest(context) {  // Contents of context object
     }
 
     // V3 records are logical files backed by multiple external replicas. Leave legacy records untouched.
-    if ((env.DB || env.img_d1) && !fileId.includes('/')) {
+    if (v3ReadEnabled(env) && (env.DB || env.img_d1) && !fileId.includes('/')) {
         try {
             const app = runtime(env);
             const v3File = await app.repository.getFile(fileId);

@@ -53,6 +53,21 @@ export class StorageRepository {
     const p = page(limit, cursor);
     return all(this.db.prepare('SELECT rowid AS cursor, * FROM storage_policies WHERE rowid > ? ORDER BY rowid LIMIT ?').bind(p.cursor, p.limit));
   }
+  async updatePolicy(id, patch) {
+    const current = await this.getPolicy(id);
+    if (!current) return null;
+    const allowed = {
+      name: 'name', enabled: 'enabled', writeMode: 'write_mode', primaryChannelId: 'primary_channel_id',
+      syncBackupChannelId: 'sync_backup_channel_id', asyncChannelIds: 'async_channels_json', requiredCopies: 'required_copies',
+      minimumReadableCopies: 'minimum_readable_copies', autoRepair: 'auto_repair', stopWhenQuotaRisk: 'stop_when_quota_risk',
+    };
+    const entries = Object.entries(patch).filter(([key, value]) => allowed[key] && value !== undefined)
+      .map(([key, value]) => [allowed[key], ['asyncChannelIds'].includes(key) ? JSON.stringify(value || []) : ['enabled', 'autoRepair', 'stopWhenQuotaRisk'].includes(key) ? (value ? 1 : 0) : value]);
+    if (!entries.length) return current;
+    await this.db.prepare(`UPDATE storage_policies SET ${entries.map(([column]) => `${column}=?`).join(',')}, updated_at=? WHERE id=?`)
+      .bind(...entries.map(([, value]) => value), now(), id).run();
+    return this.getPolicy(id);
+  }
 
   async createFileWithReplicas(file, replicas) {
     const time = now();
@@ -80,9 +95,18 @@ export class StorageRepository {
   async listReplicas(fileId) { return all(this.db.prepare(`SELECT r.*, c.provider, c.priority, c.health_status, c.enabled
       FROM file_replicas r JOIN storage_channels c ON c.id=r.channel_id WHERE r.file_id=? ORDER BY CASE r.role WHEN 'primary' THEN 0 ELSE 1 END, c.priority`).bind(fileId)); }
   async getReplica(id) { return first(this.db.prepare('SELECT * FROM file_replicas WHERE id=?').bind(id)); }
+  async switchPrimaryReplica(fileId, replicaId) {
+    const replica = await this.getReplica(replicaId);
+    if (!replica || replica.file_id !== fileId || replica.status !== 'healthy') return null;
+    await this.db.batch([
+      this.db.prepare("UPDATE file_replicas SET role='sync_backup', updated_at=? WHERE file_id=? AND role='primary' AND id<>?").bind(now(), fileId, replicaId),
+      this.db.prepare("UPDATE file_replicas SET role='primary', updated_at=? WHERE id=? AND file_id=? AND status='healthy'").bind(now(), replicaId, fileId),
+    ]);
+    return this.getReplica(replicaId);
+  }
   async updateReplica(id, patch) {
     const current = await this.getReplica(id); if (!current) return null;
-    if (patch.status) assertReplicaTransition(current.status, patch.status);
+    if (patch.status) await this.assertTransition('replica', current, patch.status, assertReplicaTransition);
     const allowed = ['status', 'remote_id', 'remote_metadata_json', 'etag', 'checksum', 'size', 'last_checked_at', 'last_success_at', 'last_error_code', 'last_error_message'];
     const entries = Object.entries(patch).filter(([key]) => allowed.includes(key));
     if (!entries.length) return current;
@@ -92,7 +116,7 @@ export class StorageRepository {
   async updateFileStatus(id, status) {
     const current = await this.getFile(id);
     if (!current) return null;
-    assertFileTransition(current.status, status);
+    await this.assertTransition('file', current, status, assertFileTransition);
     await this.db.prepare('UPDATE files_v3 SET status=?, updated_at=? WHERE id=?').bind(status, now(), id).run();
     return this.getFile(id);
   }
@@ -115,7 +139,7 @@ export class StorageRepository {
   async updateJob(id, status, patch = {}) {
     const current = await this.getJob(id);
     if (!current) return null;
-    assertJobTransition(current.status, status);
+    await this.assertTransition('job', current, status, assertJobTransition);
     await this.db.prepare(`UPDATE storage_jobs SET status=?, run_after=?, lease_until=?, last_error_code=?, last_error_message=?, completed_at=?, updated_at=? WHERE id=?`)
       .bind(status, patch.runAfter ?? now(), patch.leaseUntil ?? null, patch.errorCode ?? null, patch.errorMessage ?? null,
         ['succeeded', 'dead', 'cancelled'].includes(status) ? now() : null, now(), id).run();
@@ -134,7 +158,7 @@ export class StorageRepository {
   async deferJobForGuard(id, level) {
     const current = await this.getJob(id);
     if (!current) return null;
-    assertJobTransition(current.status, 'retry_wait');
+    await this.assertTransition('job', current, 'retry_wait', assertJobTransition);
     // Paused work is not a failed attempt. It can resume when the daily guard resets.
     await this.db.prepare(`UPDATE storage_jobs SET status='retry_wait', attempts=CASE WHEN attempts > 0 THEN attempts - 1 ELSE 0 END,
       lease_until=NULL, run_after=?, last_error_code='ZERO_COST_GUARD', last_error_message=?, updated_at=? WHERE id=?`)
@@ -164,6 +188,26 @@ export class StorageRepository {
   async getUsage(day) { return first(this.db.prepare('SELECT * FROM usage_counters WHERE day=?').bind(day)); }
   async setProtectionLevel(day, level) { await this.db.prepare('UPDATE usage_counters SET protection_level=?, updated_at=? WHERE day=?').bind(level, now(), day).run(); }
   async audit(entry) { await this.db.prepare('INSERT INTO audit_logs(id,actor_id,action,target_type,target_id,request_id,details_json,created_at) VALUES(?,?,?,?,?,?,?,?)').bind(entry.id, entry.actorId || null, entry.action, entry.targetType, entry.targetId || null, entry.requestId || null, JSON.stringify(safeAuditDetails(entry.details || {})), now()).run(); }
+  async assertTransition(entity, current, next, assertion) {
+    try {
+      assertion(current.status, next);
+    } catch (error) {
+      if (error.code !== 'INVALID_STATUS_TRANSITION') throw error;
+      try {
+        await this.audit({
+          id: `audit_transition_${crypto.randomUUID()}`,
+          action: 'state.transitionRejected',
+          targetType: entity,
+          targetId: current.id,
+          details: { from: current.status, to: next, code: error.code },
+        });
+      } catch (auditError) {
+        console.error('Failed to audit rejected state transition:', String(auditError?.message || 'unknown error').slice(0, 200));
+      }
+      console.warn(`Rejected ${entity} state transition: ${current.status} -> ${next}`);
+      throw error;
+    }
+  }
   async listJobs({ limit, cursor, status, channelId, operation } = {}) {
     const p = page(limit, cursor); const clauses = ['rowid > ?']; const values = [p.cursor];
     if (status) { clauses.push('status=?'); values.push(status); } if (channelId) { clauses.push('channel_id=?'); values.push(channelId); } if (operation) { clauses.push('operation=?'); values.push(operation); }

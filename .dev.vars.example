@@ -2,6 +2,8 @@
 ZERO_COST_MODE=true
 ALLOW_R2=false
 ENABLE_REPLICATION_V3=true
+ENABLE_V3_UPLOAD=true
+ENABLE_V3_READ=true
 MANAGEMENT_PASSWORD=replace-in-local-development
 WEBDAV_USERNAME=replace-with-webdav-username
 WEBDAV_PASSWORD=replace-with-webdav-password

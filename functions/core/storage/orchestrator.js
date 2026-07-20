@@ -1,5 +1,4 @@
 import { getAdapter } from './registry.js';
-import { assertFileTransition, assertReplicaTransition } from '../state/statusMachine.js';
 
 export class StorageOrchestrator {
   constructor(repository, env, jobService = null, healthService = null) { this.repository = repository; this.env = env; this.jobService = jobService; this.healthService = healthService; }
@@ -14,7 +13,7 @@ export class StorageOrchestrator {
   async recomputeFileHealth(fileId) {
     const file = await this.repository.getFile(fileId); const replicas = await this.repository.listReplicas(fileId); const healthy = replicas.filter(replica => replica.status === 'healthy').length;
     let status = healthy >= 2 ? 'available' : healthy === 1 ? 'degraded' : 'failed'; if (file.status === 'deleting' || file.status === 'deleted') return file;
-    assertFileTransition(file.status, status); return this.repository.updateFileStatus(fileId, status);
+    return this.repository.updateFileStatus(fileId, status);
   }
   async readCandidates(fileId) {
     const replicas = await this.repository.listReplicas(fileId);
