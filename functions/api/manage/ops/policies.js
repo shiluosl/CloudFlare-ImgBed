@@ -30,6 +30,29 @@ export async function onRequestPost({ request, env }) {
   return Response.json(publicPolicy(policy), { status: 201 });
 }
 
+export async function onRequestPatch({ request, env }) {
+  const body = await request.json();
+  if (!body.id) return Response.json({ error: 'id is required' }, { status: 400 });
+  const app = runtime(env);
+  await app.guard.assertWrite({ admin: true });
+  const current = await app.repository.getPolicy(body.id);
+  if (!current) return Response.json({ error: 'Policy not found' }, { status: 404 });
+  const candidate = {
+    ...current,
+    ...body,
+    primaryChannelId: body.primaryChannelId ?? current.primary_channel_id,
+    syncBackupChannelId: body.syncBackupChannelId ?? current.sync_backup_channel_id,
+    asyncChannelIds: body.asyncChannelIds ?? JSON.parse(current.async_channels_json || '[]'),
+    writeMode: body.writeMode ?? current.write_mode,
+    name: body.name ?? current.name,
+  };
+  const error = await validatePolicy(app.repository, candidate);
+  if (error) return Response.json({ error }, { status: 400 });
+  const policy = await app.repository.updatePolicy(body.id, body);
+  await app.repository.audit({ id: `audit_${crypto.randomUUID()}`, action: 'policy.updated', targetType: 'storage_policy', targetId: policy.id });
+  return Response.json(publicPolicy(policy));
+}
+
 async function validatePolicy(repository, body) {
   if (!body.name || !body.primaryChannelId) return 'name and primaryChannelId are required';
   if (!['safe', 'strict', 'fast'].includes(body.writeMode || 'safe')) return 'Unsupported writeMode';
