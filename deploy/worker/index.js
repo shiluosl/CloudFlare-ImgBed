@@ -27,6 +27,13 @@ import * as apiManageCusConfigBlockipList from '../../functions/api/manage/cusCo
 import * as apiManageCusConfigFiles from '../../functions/api/manage/cusConfig/files.js';
 import * as apiManageCusConfigList from '../../functions/api/manage/cusConfig/list.js';
 import * as apiManageCusConfigWhiteip from '../../functions/api/manage/cusConfig/whiteip.js';
+import * as apiManageOpsAudit from '../../functions/api/manage/ops/audit.js';
+import * as apiManageOpsChannels from '../../functions/api/manage/ops/channels.js';
+import * as apiManageOpsFiles from '../../functions/api/manage/ops/files.js';
+import * as apiManageOpsJobs from '../../functions/api/manage/ops/jobs.js';
+import * as apiManageOpsPolicies from '../../functions/api/manage/ops/policies.js';
+import * as apiManageOpsStatus from '../../functions/api/manage/ops/status.js';
+import * as apiManageOpsUpload from '../../functions/api/manage/ops/upload.js';
 import * as apiManageSysConfigOthers from '../../functions/api/manage/sysConfig/others.js';
 import * as apiManageSysConfigPage from '../../functions/api/manage/sysConfig/page.js';
 import * as apiManageSysConfigSecurity from '../../functions/api/manage/sysConfig/security.js';
@@ -62,6 +69,8 @@ import * as apiManageWhiteCatchAll from '../../functions/api/manage/white/[[path
 import * as davCatchAll from '../../functions/dav/[[path]].js';
 import * as fileCatchAll from '../../functions/file/[[path]].js';
 
+import { consumeStorageJobs } from '../../functions/queues/storageConsumer.js';
+import { runMaintenance } from '../../functions/scheduled/maintenance.js';
 
 // ==================== 自动生成的路由表 ====================
 
@@ -77,6 +86,13 @@ const routes = [
     { path: '/api/manage/cusConfig/files', module: apiManageCusConfigFiles, middlewares: [mw_api, mw_api_manage] },
     { path: '/api/manage/cusConfig/list', module: apiManageCusConfigList, middlewares: [mw_api, mw_api_manage] },
     { path: '/api/manage/cusConfig/whiteip', module: apiManageCusConfigWhiteip, middlewares: [mw_api, mw_api_manage] },
+    { path: '/api/manage/ops/audit', module: apiManageOpsAudit, middlewares: [mw_api, mw_api_manage] },
+    { path: '/api/manage/ops/channels', module: apiManageOpsChannels, middlewares: [mw_api, mw_api_manage] },
+    { path: '/api/manage/ops/files', module: apiManageOpsFiles, middlewares: [mw_api, mw_api_manage] },
+    { path: '/api/manage/ops/jobs', module: apiManageOpsJobs, middlewares: [mw_api, mw_api_manage] },
+    { path: '/api/manage/ops/policies', module: apiManageOpsPolicies, middlewares: [mw_api, mw_api_manage] },
+    { path: '/api/manage/ops/status', module: apiManageOpsStatus, middlewares: [mw_api, mw_api_manage] },
+    { path: '/api/manage/ops/upload', module: apiManageOpsUpload, middlewares: [mw_api, mw_api_manage] },
     { path: '/api/manage/sysConfig/others', module: apiManageSysConfigOthers, middlewares: [mw_api, mw_api_manage] },
     { path: '/api/manage/sysConfig/page', module: apiManageSysConfigPage, middlewares: [mw_api, mw_api_manage] },
     { path: '/api/manage/sysConfig/security', module: apiManageSysConfigSecurity, middlewares: [mw_api, mw_api_manage] },
@@ -338,5 +354,13 @@ export default {
         };
 
         return await maybeServeFromCache(request, ctx, () => executeChain(middlewares, handler, context));
+    },
+    async queue(batch, env, ctx) {
+        if (env.STORAGE_QUEUE) {
+            return consumeStorageJobs(batch, env, ctx);
+        }
+    },
+    async scheduled(controller, env, ctx) {
+        ctx.waitUntil(runMaintenance(env));
     },
 };

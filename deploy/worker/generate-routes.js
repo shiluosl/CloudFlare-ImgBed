@@ -209,6 +209,8 @@ const output = `/**
 // ==================== 自动生成的导入 ====================
 
 ${imports}
+import { consumeStorageJobs } from '../../functions/queues/storageConsumer.js';
+import { runMaintenance } from '../../functions/scheduled/maintenance.js';
 
 // ==================== 自动生成的路由表 ====================
 
@@ -440,6 +442,14 @@ export default {
         };
 
         return await maybeServeFromCache(request, ctx, () => executeChain(middlewares, handler, context));
+    },
+    async queue(batch, env, ctx) {
+        if (env.STORAGE_QUEUE) {
+            return consumeStorageJobs(batch, env, ctx);
+        }
+    },
+    async scheduled(controller, env, ctx) {
+        ctx.waitUntil(runMaintenance(env));
     },
 };
 `;
