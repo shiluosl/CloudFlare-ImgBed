@@ -3,7 +3,8 @@ const FILE_TRANSITIONS = {
   replicating: ['available', 'degraded', 'failed', 'deleting'],
   available: ['degraded', 'deleting'],
   degraded: ['available', 'failed', 'deleting'],
-  failed: ['replicating', 'deleting'],
+  // A repaired replica can restore a previously failed logical file directly.
+  failed: ['replicating', 'available', 'degraded', 'deleting'],
   deleting: ['delete_degraded', 'deleted'],
   delete_degraded: ['deleting', 'deleted'],
   deleted: [],
@@ -12,10 +13,10 @@ const FILE_TRANSITIONS = {
 const REPLICA_TRANSITIONS = {
   planned: ['uploading', 'retry_wait', 'deleting', 'deleted'],
   uploading: ['healthy', 'retry_wait', 'permanent_failure', 'deleting'],
-  healthy: ['suspect', 'missing', 'corrupt', 'deleting'],
+  healthy: ['uploading', 'suspect', 'missing', 'corrupt', 'deleting'],
   suspect: ['healthy', 'missing', 'corrupt', 'retry_wait', 'deleting'],
-  missing: ['uploading', 'retry_wait', 'deleting'],
-  corrupt: ['uploading', 'retry_wait', 'deleting'],
+  missing: ['uploading', 'healthy', 'retry_wait', 'deleting'],
+  corrupt: ['uploading', 'healthy', 'retry_wait', 'deleting'],
   retry_wait: ['uploading', 'permanent_failure', 'deleting'],
   deleting: ['deleted', 'retry_wait', 'permanent_failure'],
   deleted: [],

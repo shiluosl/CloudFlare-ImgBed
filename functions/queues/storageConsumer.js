@@ -18,10 +18,17 @@ export async function consumeStorageJobs(batch, env) {
         continue;
       }
       const replica = job.replica_id ? await app.repository.getReplica(job.replica_id) : null;
+      await assertJobAllowed(app.guard, job, file, replica);
       await executeStorageJob(app, env, job, file, replica);
       await app.repository.updateJob(job.id, 'succeeded');
       message.ack();
     } catch (error) {
+      if (error.code === 'ZERO_COST_GUARD') {
+        await app.repository.deferJobForGuard(job.id, error.level);
+        message.ack();
+        continue;
+      }
+      await app.health?.recordFailure({ channel_id: job.channel_id }, error);
       const retry = job.attempts < job.max_attempts;
       await app.repository.updateJob(job.id, retry ? 'retry_wait' : 'dead', {
         runAfter: Date.now() + retryDelay(job.attempts, error.retryAfterSeconds),
@@ -49,6 +56,7 @@ export async function executeStorageJob(app, env, job, file, replica) {
       const adapter = await adapterFor(app, env, replica.channel_id);
       await adapter.delete({ objectKey: replica.object_key, remoteId: replica.remote_id, safeMetadata: safeJson(replica.remote_metadata_json) });
       await app.repository.updateReplica(replica.id, { status: 'deleted' });
+      await app.health?.recordSuccess({ channel_id: replica.channel_id });
     }
     await app.repository.finalizeDeletion(file.id);
     return;
@@ -57,6 +65,7 @@ export async function executeStorageJob(app, env, job, file, replica) {
     const info = await (await adapterFor(app, env, replica.channel_id)).head({ objectKey: replica.object_key, remoteId: replica.remote_id });
     if (info.size !== null && Number(info.size) !== Number(file.size)) throw Object.assign(new Error('Replica size mismatch'), { code: 'CHECKSUM_MISMATCH' });
     await app.repository.updateReplica(replica.id, { status: 'healthy', size: info.size, etag: info.etag, last_checked_at: Date.now() });
+    await app.health?.recordSuccess({ channel_id: replica.channel_id });
     await app.storage.recomputeFileHealth(file.id);
     return;
   }
@@ -68,6 +77,7 @@ export async function executeStorageJob(app, env, job, file, replica) {
     await app.repository.updateReplica(replica.id, { status: 'uploading' });
     const stored = await adapter.put({ fileId: file.id, objectKey: replica.object_key, body: sourceResponse.body, size: file.size, contentType: file.content_type, name: file.name, idempotencyKey: job.idempotency_key, generation: file.generation });
     await app.repository.updateReplica(replica.id, { status: 'healthy', remote_id: stored.remoteId, remote_metadata_json: JSON.stringify(stored.safeMetadata || {}), etag: stored.etag, checksum: stored.checksum, size: stored.size, last_success_at: Date.now() });
+    await app.health?.recordSuccess({ channel_id: replica.channel_id });
     await app.storage.recomputeFileHealth(file.id);
     return;
   }
@@ -76,6 +86,16 @@ export async function executeStorageJob(app, env, job, file, replica) {
     return;
   }
   throw Object.assign(new Error(`Unsupported storage job: ${job.operation}`), { code: 'UNSUPPORTED_JOB' });
+}
+
+async function assertJobAllowed(guard, job, file, replica) {
+  if (!guard) return;
+  if (job.operation === 'DELETE_REPLICA') return guard.assertDelete({ admin: true });
+  if (job.operation === 'VERIFY_REPLICA') return guard.assertVerify();
+  if (job.operation === 'CREATE_REPLICA') return replica?.role === 'async_backup'
+    ? guard.assertAsyncReplica()
+    : guard.assertRepair({ critical: file.status === 'failed' });
+  if (job.operation === 'REPAIR_REPLICA') return guard.assertRepair({ critical: file.status === 'failed' });
 }
 
 async function adapterFor(app, env, channelId) {

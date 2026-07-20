@@ -15,16 +15,20 @@ export class JobService {
     await this.queue.send(message); await this.repository.updateJob(job.id, 'queued'); await this.guard.record({ queue_operations: 1 });
   }
   async redispatchDue(limit = 50) {
+    const recovered = await this.repository.recoverExpiredLeases(limit);
     const jobs = await this.repository.dueJobs(limit); let dispatched = 0;
     for (const job of jobs) { try { await this.enqueue(job, { essential: job.operation === 'DELETE_REPLICA' }); dispatched += 1; } catch { break; } }
-    return dispatched;
+    return { dispatched, recovered };
   }
   async retry(jobId) {
     const job = await this.repository.getJob(jobId);
     if (!job) return null;
     if (!['dead', 'retry_wait'].includes(job.status)) throw new Error('Only dead or retry_wait jobs can be retried');
+    const essential = job.operation === 'DELETE_REPLICA';
+    if (job.operation === 'VERIFY_REPLICA') await this.guard.assertVerify();
+    if (['CREATE_REPLICA', 'REPAIR_REPLICA'].includes(job.operation)) await this.guard.assertRepair({ critical: essential });
     const pending = await this.repository.updateJob(jobId, 'pending', { runAfter: Date.now() });
-    if (this.queue) await this.enqueue(pending, { essential: pending.operation === 'DELETE_REPLICA' });
+    if (this.queue) await this.enqueue(pending, { essential });
     return this.repository.getJob(jobId);
   }
   async cancel(jobId) {

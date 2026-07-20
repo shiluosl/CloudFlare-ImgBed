@@ -22,9 +22,10 @@ export class StorageRepository {
   }
   async setChannelHealth(id, status, patch = {}) {
     const time = now();
-    await this.db.prepare(`UPDATE storage_channels SET health_status=?, consecutive_failures=?, last_success_at=?, last_failure_at=?, last_error_code=?, last_error_message=?, updated_at=? WHERE id=?`)
-      .bind(status, patch.consecutiveFailures ?? 0, patch.lastSuccessAt ?? null, patch.lastFailureAt ?? null,
-        patch.errorCode ?? null, patch.errorMessage ?? null, time, id).run();
+    await this.db.prepare(`UPDATE storage_channels SET health_status=?, consecutive_failures=?, consecutive_successes=?, blocked_until=?, last_success_at=?, last_failure_at=?, last_error_code=?, last_error_message=?, updated_at=? WHERE id=?`)
+      .bind(status, patch.consecutiveFailures ?? 0, patch.consecutiveSuccesses ?? 0, patch.blockedUntil ?? null,
+        patch.lastSuccessAt ?? null, patch.lastFailureAt ?? null, patch.errorCode ?? null, patch.errorMessage ?? null, time, id).run();
+    return this.getChannel(id);
   }
   async setChannelEnabled(id, enabled) {
     const status = enabled ? 'unknown' : 'disabled';
@@ -116,17 +117,40 @@ export class StorageRepository {
     if (!current) return null;
     assertJobTransition(current.status, status);
     await this.db.prepare(`UPDATE storage_jobs SET status=?, run_after=?, lease_until=?, last_error_code=?, last_error_message=?, completed_at=?, updated_at=? WHERE id=?`)
-      .bind(status, patch.runAfter || now(), patch.leaseUntil || null, patch.errorCode || null, patch.errorMessage || null,
+      .bind(status, patch.runAfter ?? now(), patch.leaseUntil ?? null, patch.errorCode ?? null, patch.errorMessage ?? null,
         ['succeeded', 'dead', 'cancelled'].includes(status) ? now() : null, now(), id).run();
     return this.getJob(id);
   }
   async dueJobs(limit = 50) { return all(this.db.prepare(`SELECT * FROM storage_jobs WHERE status IN ('pending','retry_wait','queued') AND run_after <= ? ORDER BY run_after LIMIT ?`).bind(now(), Math.min(limit, 50))); }
+  async recoverExpiredLeases(limit = 50) {
+    const expired = await all(this.db.prepare(`SELECT id FROM storage_jobs
+      WHERE status='running' AND lease_until IS NOT NULL AND lease_until <= ? ORDER BY lease_until LIMIT ?`).bind(now(), Math.min(limit, 50)));
+    for (const job of expired) {
+      await this.db.prepare(`UPDATE storage_jobs SET status='retry_wait', lease_until=NULL, run_after=?, last_error_code='LEASE_EXPIRED', last_error_message='Worker lease expired before job completion', updated_at=?
+        WHERE id=? AND status='running' AND lease_until <= ?`).bind(now(), now(), job.id, now()).run();
+    }
+    return expired.length;
+  }
+  async deferJobForGuard(id, level) {
+    const current = await this.getJob(id);
+    if (!current) return null;
+    assertJobTransition(current.status, 'retry_wait');
+    // Paused work is not a failed attempt. It can resume when the daily guard resets.
+    await this.db.prepare(`UPDATE storage_jobs SET status='retry_wait', attempts=CASE WHEN attempts > 0 THEN attempts - 1 ELSE 0 END,
+      lease_until=NULL, run_after=?, last_error_code='ZERO_COST_GUARD', last_error_message=?, updated_at=? WHERE id=?`)
+      .bind(Date.now() + 15 * 60 * 1000, `Paused at protection level ${level || 'UNKNOWN'}`, now(), id).run();
+    return this.getJob(id);
+  }
   async createTombstone(fileId, expectedGeneration, actorId, reason) {
     const time = now();
     const generation = expectedGeneration + 1;
     await this.db.batch([
       this.db.prepare(`UPDATE files_v3 SET status='deleting', generation=?, updated_at=? WHERE id=? AND generation=? AND status NOT IN ('deleted','deleting')`).bind(generation, time, fileId, expectedGeneration),
-      this.db.prepare('INSERT OR REPLACE INTO file_tombstones(file_id,generation,reason,created_by,created_at) VALUES(?,?,?,?,?)').bind(fileId, generation, reason || null, actorId || null, time),
+      // Never replace an existing tombstone. A stale delete can only fill a missing
+      // tombstone for the generation that is already marked deleting.
+      this.db.prepare(`INSERT OR IGNORE INTO file_tombstones(file_id,generation,reason,created_by,created_at)
+        SELECT id, generation, ?, ?, ? FROM files_v3
+        WHERE id=? AND generation=? AND status='deleting'`).bind(reason || null, actorId || null, time, fileId, generation),
     ]);
     return first(this.db.prepare('SELECT * FROM file_tombstones WHERE file_id=?').bind(fileId));
   }
@@ -139,7 +163,7 @@ export class StorageRepository {
   }
   async getUsage(day) { return first(this.db.prepare('SELECT * FROM usage_counters WHERE day=?').bind(day)); }
   async setProtectionLevel(day, level) { await this.db.prepare('UPDATE usage_counters SET protection_level=?, updated_at=? WHERE day=?').bind(level, now(), day).run(); }
-  async audit(entry) { await this.db.prepare('INSERT INTO audit_logs(id,actor_id,action,target_type,target_id,request_id,details_json,created_at) VALUES(?,?,?,?,?,?,?,?)').bind(entry.id, entry.actorId || null, entry.action, entry.targetType, entry.targetId || null, entry.requestId || null, JSON.stringify(entry.details || {}), now()).run(); }
+  async audit(entry) { await this.db.prepare('INSERT INTO audit_logs(id,actor_id,action,target_type,target_id,request_id,details_json,created_at) VALUES(?,?,?,?,?,?,?,?)').bind(entry.id, entry.actorId || null, entry.action, entry.targetType, entry.targetId || null, entry.requestId || null, JSON.stringify(safeAuditDetails(entry.details || {})), now()).run(); }
   async listJobs({ limit, cursor, status, channelId, operation } = {}) {
     const p = page(limit, cursor); const clauses = ['rowid > ?']; const values = [p.cursor];
     if (status) { clauses.push('status=?'); values.push(status); } if (channelId) { clauses.push('channel_id=?'); values.push(channelId); } if (operation) { clauses.push('operation=?'); values.push(operation); }
@@ -161,4 +185,12 @@ export class StorageRepository {
     }
     return file;
   }
+}
+
+function safeAuditDetails(value) {
+  if (Array.isArray(value)) return value.map(safeAuditDetails);
+  if (value && typeof value === 'object') return Object.fromEntries(Object.entries(value)
+    .filter(([key]) => !/authorization|cookie|token|secret|password|signature/i.test(key))
+    .map(([key, item]) => [key, safeAuditDetails(item)]));
+  return typeof value === 'string' ? value.replace(/(bearer|basic)\s+[^\s]+/gi, '$1 [redacted]').slice(0, 500) : value;
 }

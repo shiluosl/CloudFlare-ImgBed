@@ -2,14 +2,14 @@ import { getAdapter } from './registry.js';
 import { assertFileTransition, assertReplicaTransition } from '../state/statusMachine.js';
 
 export class StorageOrchestrator {
-  constructor(repository, env, jobService = null) { this.repository = repository; this.env = env; this.jobService = jobService; }
+  constructor(repository, env, jobService = null, healthService = null) { this.repository = repository; this.env = env; this.jobService = jobService; this.healthService = healthService; }
   async channelsForPolicy(policy) {
     const ids = [policy.primary_channel_id, policy.sync_backup_channel_id, ...JSON.parse(policy.async_channels_json || '[]')].filter(Boolean);
     const channels = await Promise.all(ids.map(id => this.repository.getChannel(id))); return channels.filter(Boolean);
   }
   async writeReplica(file, replica, channel, input) {
-    try { const adapter = getAdapter(normalizeChannel(channel), this.env); await this.repository.updateReplica(replica.id, { status: 'uploading' }); const stored = await adapter.put({ ...input, fileId: file.id, objectKey: replica.object_key, generation: file.generation }); await this.repository.updateReplica(replica.id, { status: 'healthy', remote_id: stored.remoteId, remote_metadata_json: JSON.stringify(stored.safeMetadata || {}), etag: stored.etag, checksum: stored.checksum, size: stored.size, last_success_at: Date.now(), last_error_code: null, last_error_message: null }); return { replica: await this.repository.getReplica(replica.id), stored }; }
-    catch (error) { await this.repository.updateReplica(replica.id, { status: 'retry_wait', last_error_code: error.code || 'UNKNOWN', last_error_message: safeErrorMessage(error) }); return { replica: await this.repository.getReplica(replica.id), error }; }
+    try { const adapter = getAdapter(normalizeChannel(channel), this.env); await this.repository.updateReplica(replica.id, { status: 'uploading' }); const stored = await adapter.put({ ...input, fileId: file.id, objectKey: replica.object_key, generation: file.generation }); await this.repository.updateReplica(replica.id, { status: 'healthy', remote_id: stored.remoteId, remote_metadata_json: JSON.stringify(stored.safeMetadata || {}), etag: stored.etag, checksum: stored.checksum, size: stored.size, last_success_at: Date.now(), last_error_code: null, last_error_message: null }); await this.healthService?.recordSuccess(channel); return { replica: await this.repository.getReplica(replica.id), stored }; }
+    catch (error) { await this.repository.updateReplica(replica.id, { status: 'retry_wait', last_error_code: error.code || 'UNKNOWN', last_error_message: safeErrorMessage(error) }); await this.healthService?.recordFailure(channel, error); return { replica: await this.repository.getReplica(replica.id), error }; }
   }
   async recomputeFileHealth(fileId) {
     const file = await this.repository.getFile(fileId); const replicas = await this.repository.listReplicas(fileId); const healthy = replicas.filter(replica => replica.status === 'healthy').length;
@@ -18,7 +18,8 @@ export class StorageOrchestrator {
   }
   async readCandidates(fileId) {
     const replicas = await this.repository.listReplicas(fileId);
-    return replicas.filter(replica => ['healthy', 'suspect'].includes(replica.status) && replica.enabled && !['offline', 'disabled', 'quota_blocked'].includes(replica.health_status))
+    const time = Date.now();
+    return replicas.filter(replica => ['healthy', 'suspect'].includes(replica.status) && replica.enabled && !['offline', 'disabled', 'quota_blocked'].includes(replica.health_status) && (!replica.blocked_until || Number(replica.blocked_until) <= time))
       .sort((a, b) => score(b) - score(a)).slice(0, 2);
   }
   async openReplica(replica, range) { const channel = await this.repository.getChannel(replica.channel_id); return getAdapter(normalizeChannel(channel), this.env).get({ objectKey: replica.object_key, remoteId: replica.remote_id, safeMetadata: JSON.parse(replica.remote_metadata_json || '{}'), range }); }
