@@ -8,6 +8,12 @@ export function workerRequestSampleRate(env = {}) {
   return Math.min(Math.max(Math.floor(configured), 1), 10_000);
 }
 
+export function d1ReadsPerSampledV3Request(env = {}) {
+  const configured = Number(env.D1_READS_PER_SAMPLED_V3_REQUEST);
+  if (!Number.isFinite(configured)) return 3;
+  return Math.min(Math.max(Math.floor(configured), 1), 100);
+}
+
 export function requestMarker(input) {
   if (input instanceof Request) {
     const ray = input.headers.get('cf-ray');
@@ -26,7 +32,13 @@ export async function recordWorkerRequestEstimate(env, input, createRuntime = ru
   if (!shouldEstimateWorkerRequest(input, env)) return false;
   const sampleRate = workerRequestSampleRate(env);
   try {
-    await createRuntime(env).guard.record({ worker_requests: sampleRate });
+    // A sampled invocation shares one advisory D1 upsert for both counters.
+    // This avoids turning public reads into metering writes while still tracking
+    // the small, normal V3 D1 read footprint used by the guard.
+    await createRuntime(env).guard.record({
+      worker_requests: sampleRate,
+      d1_reads: sampleRate * d1ReadsPerSampledV3Request(env),
+    });
     return true;
   } catch (error) {
     // Metering is advisory and must never turn a public read into a failure.

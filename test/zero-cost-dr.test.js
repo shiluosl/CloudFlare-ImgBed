@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { StorageError, STORAGE_ERROR_CODES } from '../functions/core/storage/adapter.js';
 import { getAdapter } from '../functions/core/storage/registry.js';
 import { calculateProtectionLevel } from '../functions/core/cost/zeroCostGuard.js';
-import { recordWorkerRequestEstimate, shouldEstimateWorkerRequest, workerRequestSampleRate } from '../functions/core/cost/requestMeter.js';
+import { d1ReadsPerSampledV3Request, recordWorkerRequestEstimate, shouldEstimateWorkerRequest, workerRequestSampleRate } from '../functions/core/cost/requestMeter.js';
 import { assertFileTransition, assertReplicaTransition, assertJobTransition } from '../functions/core/state/statusMachine.js';
 import { WebDavAdapter } from '../functions/adapters/webdav/webdavAdapter.js';
 import { TelegramAdapter } from '../functions/adapters/telegram/telegramAdapter.js';
@@ -21,7 +21,9 @@ import { onRequestPost as createPolicy } from '../functions/api/manage/ops/polic
 import { v3ReadEnabled, v3UploadEnabled } from '../functions/core/config.js';
 import { StorageOrchestrator } from '../functions/core/storage/orchestrator.js';
 import { execFileSync } from 'node:child_process';
-import { readFileSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
 
 describe('zero-cost DR core', () => {
   it('rejects R2 in zero-cost mode', () => {
@@ -34,11 +36,13 @@ describe('zero-cost DR core', () => {
   it('uses bounded sampled request estimates instead of a D1 write per request', async () => {
     assert.equal(workerRequestSampleRate({}), 100);
     assert.equal(workerRequestSampleRate({ WORKER_REQUEST_SAMPLE_RATE: '0' }), 1);
+    assert.equal(d1ReadsPerSampledV3Request({}), 3);
+    assert.equal(d1ReadsPerSampledV3Request({ D1_READS_PER_SAMPLED_V3_REQUEST: '0' }), 1);
     assert.equal(shouldEstimateWorkerRequest('any-v3-request', { WORKER_REQUEST_SAMPLE_RATE: '1' }), true);
     const records = [];
     const recorded = await recordWorkerRequestEstimate({ WORKER_REQUEST_SAMPLE_RATE: '7' }, 'sampled-request', () => ({ guard: { async record(change) { records.push(change); } } }));
     assert.equal(recorded, shouldEstimateWorkerRequest('sampled-request', { WORKER_REQUEST_SAMPLE_RATE: '7' }));
-    if (recorded) assert.deepEqual(records, [{ worker_requests: 7 }]);
+    if (recorded) assert.deepEqual(records, [{ worker_requests: 7, d1_reads: 21 }]);
     else assert.deepEqual(records, []);
   });
   it('guards status transitions while allowing controlled recovery', () => { assert.doesNotThrow(() => assertFileTransition('receiving', 'available')); assert.doesNotThrow(() => assertFileTransition('failed', 'available')); assert.throws(() => assertFileTransition('deleted', 'available')); assert.doesNotThrow(() => assertReplicaTransition('planned', 'uploading')); assert.doesNotThrow(() => assertReplicaTransition('missing', 'healthy')); assert.throws(() => assertReplicaTransition('deleted', 'healthy')); assert.doesNotThrow(() => assertJobTransition('pending', 'queued')); assert.throws(() => assertJobTransition('succeeded', 'running')); });
@@ -67,7 +71,8 @@ describe('upload disaster recovery workflow', () => {
   it('records available, degraded, failed, strict, fast, and idempotent uploads', async () => {
     const repo = new UploadMemoryRepository();
     const jobs = { records: [], async create(job) { this.records.push(job); return job; } };
-    const guard = { limits: { HARD_MAX_UPLOAD_BYTES: 20 * 1024 * 1024, MAX_UPLOAD_BYTES: 10 * 1024 * 1024, MAX_SYNC_CHANNELS: 2 }, async assertWrite() {}, async assertRepair() {}, async assertAsyncReplica() {}, async record() {} };
+    const usageRecords = [];
+    const guard = { limits: { HARD_MAX_UPLOAD_BYTES: 20 * 1024 * 1024, MAX_UPLOAD_BYTES: 10 * 1024 * 1024, MAX_SYNC_CHANNELS: 2 }, async assertWrite() {}, async assertRepair() {}, async assertAsyncReplica() {}, async record(change) { usageRecords.push(change); } };
     const service = new UploadService(repo, guard, { ZERO_COST_MODE: 'true' }, jobs);
     const statuses = ['healthy', 'healthy', 'healthy', 'retry_wait', 'retry_wait', 'retry_wait', 'healthy', 'retry_wait', 'healthy'];
     service.orchestrator = {
@@ -77,6 +82,7 @@ describe('upload disaster recovery workflow', () => {
     const input = { policyId: 'policy', idempotencyKey: 'dual-success', name: 'demo.txt', contentType: 'text/plain', size: 3, body: new Blob(['abc']), admin: true };
     const ok = await service.upload(input);
     assert.equal(ok.file.status, 'available');
+    assert.ok(usageRecords[0].database_bytes_estimate > 0);
     const repeated = await service.upload(input);
     assert.equal(repeated.idempotent, true);
     const degraded = await service.upload({ ...input, idempotencyKey: 'one-failed', body: new Blob(['abc']) });
@@ -147,6 +153,40 @@ describe('upload disaster recovery workflow', () => {
     };
     const result = await new StorageOrchestrator(repository, {}).recomputeFileHealth('file_1');
     assert.equal(result.status, 'degraded');
+  });
+
+  it('uses policy synchronous-copy thresholds for health without hiding the last readable replica', async () => {
+    const repository = {
+      async getFile() { return { id: 'file_1', policy_id: 'policy_1', status: 'receiving' }; },
+      async getPolicy() { return { required_copies: 1, minimum_readable_copies: 1 }; },
+      async listReplicas() { return [
+        { id: 'primary', role: 'primary', status: 'healthy' },
+        { id: 'sync', role: 'sync_backup', status: 'retry_wait' },
+      ]; },
+      async updateFileStatus(_id, status) { return { status }; },
+    };
+    assert.equal((await new StorageOrchestrator(repository, {}).recomputeFileHealth('file_1')).status, 'available');
+    repository.getPolicy = async () => ({ required_copies: 2, minimum_readable_copies: 1 });
+    assert.equal((await new StorageOrchestrator(repository, {}).recomputeFileHealth('file_1')).status, 'degraded');
+  });
+
+  it('pauses quota-risk policies before creating a logical file', async () => {
+    const repo = new UploadMemoryRepository();
+    repo.policy.stop_when_quota_risk = 1;
+    const guard = {
+      limits: { HARD_MAX_UPLOAD_BYTES: 20 * 1024 * 1024, MAX_UPLOAD_BYTES: 10 * 1024 * 1024, MAX_SYNC_CHANNELS: 2 },
+      async assertWrite() {}, async status() { return { level: 'WARNING' }; }, async assertRepair() {}, async assertAsyncReplica() {}, async record() {},
+    };
+    const service = new UploadService(repo, guard, { ZERO_COST_MODE: 'true' }, null);
+    await assert.rejects(() => service.upload({ policyId: 'policy', idempotencyKey: 'quota-risk', name: 'demo.txt', contentType: 'text/plain', size: 3, body: new Blob(['abc']), admin: true }), error => error.code === 'QUOTA_RISK_POLICY' && error.status === 503);
+    assert.equal(repo.files.size, 0);
+    repo.policy.stop_when_quota_risk = 0;
+    service.orchestrator = {
+      async writeReplica(file, replica) { await repo.updateReplica(replica.id, { status: 'healthy' }); return { replica: await repo.getReplica(replica.id), stored: { size: file.size } }; },
+      async recomputeFileHealth(fileId) { return repo.updateFileStatus(fileId, 'available'); },
+    };
+    const result = await service.upload({ policyId: 'policy', idempotencyKey: 'quota-risk-opt-out', name: 'demo.txt', contentType: 'text/plain', size: 3, body: new Blob(['abc']), admin: true });
+    assert.equal(result.file.status, 'available');
   });
 });
 
@@ -313,6 +353,19 @@ describe('zero-cost controls and security', () => {
   it('flags active R2 bindings in deployment configuration', () => {
     const base = process.cwd();
     assert.deepEqual(inspectZeroCostFiles(base), []);
+  });
+  it('fails the zero-cost scan when a disposable Wrangler config declares R2', () => {
+    const base = mkdtempSync(join(tmpdir(), 'imgbed-zero-cost-r2-'));
+    try {
+      for (const dir of ['deploy/worker', '.github/workflows', 'functions/core/storage']) mkdirSync(join(base, dir), { recursive: true });
+      writeFileSync(join(base, 'deploy/worker/wrangler.toml'), '[vars]\nZERO_COST_MODE = "true"\nALLOW_R2 = "false"\n[[r2_buckets]]\nbinding = "R2"\nbucket_name = "forbidden"\n');
+      writeFileSync(join(base, 'deploy/worker/generate-toml.js'), '');
+      writeFileSync(join(base, '.github/workflows/deploy-worker.yml'), '');
+      writeFileSync(join(base, 'wrangler.toml.example'), '');
+      writeFileSync(join(base, 'functions/core/storage/registry.js'), "if (provider === 'r2' && !r2Allowed) throw new Error('disabled');");
+      writeFileSync(join(base, 'deploy/worker/index.js'), "function zeroCostEnvironment(property) { return property === 'img_r2'; }");
+      assert.ok(inspectZeroCostFiles(base).some(message => message.includes('R2 binding')));
+    } finally { rmSync(base, { recursive: true, force: true }); }
   });
   it('requires real V3 bindings for a deployment configuration', () => {
     const path = 'deploy/worker/wrangler.toml';

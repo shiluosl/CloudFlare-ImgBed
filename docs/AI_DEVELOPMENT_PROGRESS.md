@@ -2,7 +2,7 @@
 
 ## Current phase
 
-Phase 12 and the final deployment and operations hardening follow-up are complete on `feature/zero-cost-dr-v3`. The follow-up closes deployment-binding, legacy-R2 isolation, legacy-KV deployment isolation, rollback-flag, management-surface, transition-audit, durable-Queue, upload-state, fair bounded maintenance-scan, silent-replica-loss recovery, sampled Worker usage, rate-paused synchronous-upload preflight, and complete policy-controls gaps identified in a post-implementation audit.
+Phase 12 and final audit are complete on `feature/zero-cost-dr-v3`. The final audit closes deployment-binding, legacy-R2 isolation, legacy-KV deployment isolation, rollback-flag, management-surface, transition-audit, durable-Queue, upload-state, fair bounded maintenance-scan, silent-replica-loss recovery, sampled usage, rate-paused synchronous-upload preflight, policy-controls, D1-read estimation, and metadata-size estimation gaps identified in post-implementation review.
 
 ## Completed
 
@@ -31,6 +31,10 @@ Phase 12 and the final deployment and operations hardening follow-up are complet
 - Synchronous upload preflight now treats a future channel `blocked_until` as unavailable, preventing rate-limited channels from creating immediately stranded logical files.
 - Expanded the operations policy UI/API validation to configure async channels, required/minimum readable copies, automatic repair, and quota-risk writes. Channels and policies now use the same bounded cursor pagination as files, jobs, and audits.
 - The deploy workflow now requires generated D1/Queue bindings and runs deployment-binding validation plus a secret scan before invoking Wrangler.
+- Enforced `required_copies` and `minimum_readable_copies` as the bounded synchronous health target while preserving a read from the last healthy replica; asynchronous copies cannot make a required synchronous copy healthy.
+- Enforced `stop_when_quota_risk` before logical-file creation at every non-`NORMAL` guard level, with a `QUOTA_RISK_POLICY` refusal that leaves no orphaned file.
+- Added one-upsert sampled D1-read estimation (`D1_READS_PER_SAMPLED_V3_REQUEST=3`) and bounded upload metadata-size estimates for the zero-cost operations panel.
+- Added regression coverage for policy enforcement, nonzero metadata estimates, sampled D1 reads, and a disposable R2-bound Wrangler configuration that must fail the zero-cost scanner.
 
 ## Not completed / deliberate limits
 
@@ -52,7 +56,7 @@ Phase 12 and the final deployment and operations hardening follow-up are complet
   - `npm.cmd run check:secrets`
   - `npm.cmd run build` - 52 routes, 9 catch-all routes
   - `frontend-dist/ops.html` inline JavaScript syntax validation
-  - Final metering and operations-controls verification on 2026-07-21: `npm.cmd test` - 30 unit tests and 4 integration tests passing; `npm.cmd run lint`, `npm.cmd run check:migrations`, `npm.cmd run check:secrets`, `npm.cmd run build`, and binding-free `npx.cmd wrangler deploy --dry-run --config deploy/worker/wrangler.toml` all passed. The dry run reported only `ASSETS` plus zero-cost environment variables and no D1/Queue bindings because the checked-in TOML remains intentionally identifier-free.
+  - Final policy and estimate audit on 2026-07-21: `npm.cmd test` - 33 unit tests and 4 integration tests passing; `npm.cmd run lint`, `npm.cmd run check:migrations`, `npm.cmd run check:secrets`, `npm.cmd run build`, and binding-free `npx.cmd wrangler deploy --dry-run --config deploy/worker/wrangler.toml` all passed. The dry run reported only `ASSETS` plus zero-cost environment variables and no D1/Queue bindings because the checked-in TOML remains intentionally identifier-free.
 
 ## Commits created
 
@@ -75,7 +79,7 @@ Phase 12 and the final deployment and operations hardening follow-up are complet
 - Latest deployment-isolation patch: `fix(deploy): exclude KV from zero-cost V3 Worker bindings` (see Git history for the immutable commit ID).
 - Latest operations hardening patch: `b6a0c51` `fix(ops): rotate bounded health checks and normalize management errors`.
 - Latest reconciliation patch: `feat(repair): add bounded replica reconciliation`.
-- Final follow-up change set: sampled Worker usage, rate-paused upload preflight, complete policy operations controls, and pre-deploy binding validation.
+- Final follow-up change set: sampled Worker/D1-read usage, bounded metadata estimates, policy health/quota enforcement, rate-paused upload preflight, complete policy operations controls, and pre-deploy binding validation.
 
 ## Key decisions
 

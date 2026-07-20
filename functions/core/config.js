@@ -8,6 +8,7 @@ export const DEFAULT_LIMITS = Object.freeze({
   HARD_MAX_UPLOAD_BYTES: 20971520,
   MAX_SYNC_CHANNELS: 2,
   WORKER_REQUEST_SAMPLE_RATE: 100,
+  D1_READS_PER_SAMPLED_V3_REQUEST: 3,
 });
 
 export function isEnabled(value, defaultValue = false) {

@@ -15,8 +15,15 @@ export class StorageOrchestrator {
     const required = replicas.filter(replica => ['primary', 'sync_backup'].includes(replica.role));
     const healthyRequired = required.filter(replica => replica.status === 'healthy').length;
     const healthyAny = replicas.filter(replica => replica.status === 'healthy').length;
-    // Optional asynchronous copies improve recoverability but cannot mask a missing synchronous backup.
-    const status = required.length > 1 && healthyRequired === required.length
+    const policy = file?.policy_id ? await this.repository.getPolicy?.(file.policy_id) : null;
+    const requiredCopies = boundedPolicyCopies(policy?.required_copies, required.length || 2);
+    const minimumReadableCopies = boundedPolicyCopies(policy?.minimum_readable_copies, 1);
+    const healthTarget = Math.max(requiredCopies, minimumReadableCopies);
+    // Async replicas improve recoverability but do not satisfy a policy's
+    // synchronous-copy health target. A single healthy synchronous copy stays
+    // readable; the target controls available versus degraded state, not a
+    // hard read denial that would defeat failover.
+    const status = healthyRequired >= healthTarget
       ? 'available'
       : healthyAny > 0 ? 'degraded' : 'failed';
     if (file.status === 'deleting' || file.status === 'deleted') return file;
@@ -29,6 +36,10 @@ export class StorageOrchestrator {
       .sort((a, b) => score(b) - score(a)).slice(0, 2);
   }
   async openReplica(replica, range) { const channel = await this.repository.getChannel(replica.channel_id); return getAdapter(normalizeChannel(channel), this.env).get({ objectKey: replica.object_key, remoteId: replica.remote_id, safeMetadata: JSON.parse(replica.remote_metadata_json || '{}'), range }); }
+}
+function boundedPolicyCopies(value, fallback) {
+  const number = Number(value);
+  return Number.isInteger(number) ? Math.min(Math.max(number, 1), 2) : fallback;
 }
 function score(replica) { return (replica.role === 'primary' ? 1000 : 0) + (replica.health_status === 'healthy' ? 100 : 0) - (replica.priority || 100); }
 function normalizeChannel(channel) { return { ...channel, config: JSON.parse(channel.config_json || '{}'), secretRefs: JSON.parse(channel.secret_refs_json || '{}') }; }

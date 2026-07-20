@@ -5,6 +5,7 @@ ENABLE_REPLICATION_V3=true
 ENABLE_V3_UPLOAD=true
 ENABLE_V3_READ=true
 WORKER_REQUEST_SAMPLE_RATE=100
+D1_READS_PER_SAMPLED_V3_REQUEST=3
 MANAGEMENT_PASSWORD=replace-in-local-development
 WEBDAV_USERNAME=replace-with-webdav-username
 WEBDAV_PASSWORD=replace-with-webdav-password
