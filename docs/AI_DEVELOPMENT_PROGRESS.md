@@ -2,7 +2,7 @@
 
 ## Current phase
 
-Hardening follow-up is in progress on the existing Phase 12 branch. The original V3 milestones are implemented, and the current follow-up closes data-consistency, guard-policy, endpoint-security, and migration-test gaps identified in a post-implementation audit.
+Phase 12 and the hardening follow-up are complete on `feature/zero-cost-dr-v3`. The final follow-up closes data-consistency, guard-policy, endpoint-security, and migration-test gaps identified in a post-implementation audit.
 
 ## Completed
 
@@ -68,9 +68,9 @@ Hardening follow-up is in progress on the existing Phase 12 branch. The original
 
 ## Next actions
 
-1. Commit and push the hardening changes on `feature/zero-cost-dr-v3`.
-2. Apply `0030_zero_cost_dr_v3.sql` and then `0031_zero_cost_dr_health_leases.sql` to an operator-owned D1 database.
-3. Configure dedicated non-production WebDAV and Telegram credentials before external end-to-end tests.
+1. Apply `0030_zero_cost_dr_v3.sql` and then `0031_zero_cost_dr_health_leases.sql` to an operator-owned D1 database.
+2. Configure dedicated non-production WebDAV and Telegram credentials before external end-to-end tests.
+3. Open a pull request from `feature/zero-cost-dr-v3` after reviewing the external-provider test evidence.
 
 ## Known limits
 
