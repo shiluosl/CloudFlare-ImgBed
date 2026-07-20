@@ -18,6 +18,8 @@ import {
     resolveWebDAVCredentials,
 } from '../utils/metadata/channelCredentials.js';
 import { buildCdnFileUrl } from '../utils/metadata/metadataView.js';
+import { runtime } from '../core/runtime.js';
+import { FileService } from '../core/files/fileService.js';
 
 
 export async function onRequest(context) {  // Contents of context object
@@ -37,6 +39,22 @@ export async function onRequest(context) {  // Contents of context object
         fileId = params.path.split(',').join('/');
     } catch (e) {
         return new Response('Error: Decode Image ID Failed', { status: 400 });
+    }
+
+    // V3 records are logical files backed by multiple external replicas. Leave legacy records untouched.
+    if ((env.DB || env.img_d1) && !fileId.includes('/')) {
+        try {
+            const app = runtime(env);
+            const v3File = await app.repository.getFile(fileId);
+            if (v3File) {
+                return (await new FileService(app).read(fileId, request)).response;
+            }
+        } catch (error) {
+            // A missing V3 migration must not make existing upstream files unreadable.
+            if (error.code !== 'D1_REQUIRED' && !/no such table/i.test(error.message)) {
+                console.warn('V3 file read failed:', error.code || error.message);
+            }
+        }
     }
 
     // 读取安全配置，解析必要参数
