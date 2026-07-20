@@ -66,6 +66,7 @@ Phase 12 and the final deployment and operations hardening follow-up are complet
 - `d661fa4` `feat(admin): expand zero-cost storage operations`
 - Latest: `test(dr): harden required replica semantics and queue recovery coverage` (see Git history for the immutable commit ID).
 - Latest deployment-isolation patch: `fix(deploy): exclude KV from zero-cost V3 Worker bindings` (see Git history for the immutable commit ID).
+- Latest operations hardening patch: `b6a0c51` `fix(ops): rotate bounded health checks and normalize management errors`.
 
 ## Key decisions
 
