@@ -21,7 +21,8 @@ async function errorHandling(context) {
   try {
     return withDefaultCacheControl(await context.next());
   } catch (err) {
-    return new Response(`${err.message}\n${err.stack}`, {
+    console.error('Management API request failed:', String(err?.message || 'unknown error').replace(/(bearer|basic)\s+[^\s]+/gi, '$1 [redacted]'));
+    return new Response('Internal Server Error', {
       status: 500,
       headers: {
         'Cache-Control': DEFAULT_MANAGE_CACHE_CONTROL,

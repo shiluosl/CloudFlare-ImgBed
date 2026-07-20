@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Storage Operations | CloudFlare-ImgBed</title>
+  <style>
+    :root { color-scheme: light; font-family: Arial, sans-serif; color: #172033; background: #f4f6f8; }
+    body { margin: 0; }
+    header, main { max-width: 1180px; margin: auto; padding: 20px; }
+    header { display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #dbe1e8; }
+    h1 { font-size: 22px; margin: 0; } h2 { font-size: 16px; margin: 0 0 12px; }
+    main { display: grid; gap: 20px; } section { background: #fff; border: 1px solid #dbe1e8; border-radius: 6px; padding: 16px; }
+    .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; }
+    .stat { border-left: 3px solid #1976d2; padding: 8px 10px; background: #f8fafc; } .label { color: #667085; font-size: 12px; }
+    table { border-collapse: collapse; width: 100%; font-size: 13px; } th, td { border-bottom: 1px solid #e7ebef; padding: 8px; text-align: left; vertical-align: top; }
+    th { color: #475467; font-weight: 600; } code { font-size: 12px; word-break: break-all; }
+    button { background: #1976d2; border: 0; color: #fff; border-radius: 4px; padding: 8px 10px; cursor: pointer; }
+    button.secondary { background: #4b5563; } .warning { color: #b54708; } .danger { color: #b42318; } .ok { color: #027a48; }
+    #error { white-space: pre-wrap; color: #b42318; min-height: 18px; } form { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+    input, select { padding: 7px; border: 1px solid #cbd5e1; border-radius: 4px; } @media (max-width: 680px) { header { align-items: flex-start; gap: 12px; flex-direction: column; } table { display: block; overflow-x: auto; } }
+  </style>
+</head>
+<body>
+  <header><h1>Storage Operations</h1><button id="refresh" class="secondary">Refresh</button></header>
+  <main>
+    <div id="error" role="alert"></div>
+    <section><h2>Zero-Cost Protection</h2><div id="status" class="stats"></div></section>
+    <section><h2>Storage Channels</h2><div id="channels"></div><form id="channel-form"><input name="name" required placeholder="Channel name"><select name="provider"><option value="webdav">WebDAV</option><option value="telegram">Telegram</option></select><input name="failureDomain" required placeholder="Failure domain"><input name="configJson" placeholder='Config JSON, e.g. {"baseUrl":"https://..."}'><input name="secretRefsJson" placeholder='Secret refs JSON, e.g. {"passwordRef":"WEBDAV_PASSWORD"}'><button>Add channel</button></form></section>
+    <section><h2>Policies</h2><div id="policies"></div><form id="policy-form"><input name="name" required placeholder="Policy name"><input name="primaryChannelId" required placeholder="Primary channel ID"><input name="syncBackupChannelId" placeholder="Sync backup channel ID"><select name="writeMode"><option value="safe">safe</option><option value="strict">strict</option><option value="fast">fast</option></select><button>Add policy</button></form></section>
+    <section><h2>Recent Jobs</h2><div id="jobs"></div></section>
+    <section><h2>Recent Files</h2><div id="files"></div></section>
+  </main>
+  <script>
+    const api = (path, options = {}) => fetch('/api/manage/ops/' + path, { credentials: 'same-origin', ...options }).then(async response => { const data = await response.json().catch(() => ({})); if (!response.ok) throw new Error(data.error || response.statusText); return data; });
+    const escape = value => String(value ?? '').replace(/[&<>"']/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[char]);
+    const table = (headers, rows) => `<table><thead><tr>${headers.map(escape).map(value => `<th>${value}</th>`).join('')}</tr></thead><tbody>${rows.join('') || `<tr><td colspan="${headers.length}">No records</td></tr>`}</tbody></table>`;
+    async function load() {
+      document.querySelector('#error').textContent = '';
+      try {
+        const [status, channels, policies, jobs, files] = await Promise.all([api('status'), api('channels?limit=25'), api('policies?limit=25'), api('jobs?limit=25'), api('files?limit=25')]);
+        const usage = status.usage || {};
+        document.querySelector('#status').innerHTML = [['Level', status.level], ['Uploads', usage.uploads || 0], ['Worker requests', usage.worker_requests || 0], ['D1 reads', usage.d1_reads || 0], ['D1 writes', usage.d1_writes || 0], ['Queue operations', usage.queue_operations || 0], ['R2', status.r2Disabled ? 'Disabled' : 'Unexpected']].map(([label, value]) => `<div class="stat"><div class="label">${label}</div><strong>${escape(value)}</strong></div>`).join('');
+        document.querySelector('#channels').innerHTML = table(['Name', 'Provider', 'Health', 'Priority', 'Actions'], channels.items.map(channel => `<tr><td>${escape(channel.name)}</td><td>${escape(channel.provider)}</td><td>${escape(channel.health_status)}</td><td>${escape(channel.priority)}</td><td><button data-health="${escape(channel.id)}">Check</button> <button class="secondary" data-toggle="${escape(channel.id)}" data-enabled="${channel.enabled}">${channel.enabled ? 'Disable' : 'Enable'}</button></td></tr>`));
+        document.querySelector('#policies').innerHTML = table(['Name', 'Mode', 'Primary', 'Sync backup', 'Repair'], policies.items.map(policy => `<tr><td>${escape(policy.name)}</td><td>${escape(policy.write_mode)}</td><td><code>${escape(policy.primary_channel_id)}</code></td><td><code>${escape(policy.sync_backup_channel_id || '-')}</code></td><td>${policy.auto_repair ? 'On' : 'Off'}</td></tr>`));
+        document.querySelector('#jobs').innerHTML = table(['Operation', 'Status', 'File', 'Attempts', 'Action'], jobs.items.map(job => `<tr><td>${escape(job.operation)}</td><td>${escape(job.status)}</td><td><code>${escape(job.file_id)}</code></td><td>${escape(job.attempts)}/${escape(job.max_attempts)}</td><td>${['dead', 'retry_wait'].includes(job.status) ? `<button data-retry="${escape(job.id)}">Retry</button>` : ''} ${['pending', 'queued', 'retry_wait'].includes(job.status) ? `<button class="secondary" data-cancel="${escape(job.id)}">Cancel</button>` : ''}</td></tr>`));
+        document.querySelector('#files').innerHTML = table(['File', 'Status', 'Size', 'Public URL'], files.items.map(file => `<tr><td>${escape(file.name)}</td><td>${escape(file.status)}</td><td>${escape(file.size)}</td><td><a href="/file/${encodeURIComponent(file.id)}"><code>/file/${escape(file.id)}</code></a></td></tr>`));
+      } catch (error) { document.querySelector('#error').textContent = error.message; }
+    }
+    document.addEventListener('click', async event => { const button = event.target.closest('button[data-health],button[data-toggle],button[data-retry],button[data-cancel]'); if (!button) return; try { if (button.dataset.health) await api('channels', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ channelId: button.dataset.health, action: 'health_check' }) }); if (button.dataset.toggle) await api('channels', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ channelId: button.dataset.toggle, action: button.dataset.enabled === '1' ? 'disable' : 'enable' }) }); if (button.dataset.retry) await api('jobs', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ jobId: button.dataset.retry, action: 'retry' }) }); if (button.dataset.cancel) await api('jobs', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ jobId: button.dataset.cancel, action: 'cancel' }) }); await load(); } catch (error) { document.querySelector('#error').textContent = error.message; } });
+    document.querySelector('#channel-form').addEventListener('submit', async event => { event.preventDefault(); const form = new FormData(event.target); try { const body = Object.fromEntries(form); body.config = body.configJson ? JSON.parse(body.configJson) : {}; body.secretRefs = body.secretRefsJson ? JSON.parse(body.secretRefsJson) : {}; delete body.configJson; delete body.secretRefsJson; await api('channels', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }); event.target.reset(); await load(); } catch (error) { document.querySelector('#error').textContent = error.message; } });
+    document.querySelector('#policy-form').addEventListener('submit', async event => { event.preventDefault(); const form = new FormData(event.target); try { await api('policies', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(Object.fromEntries(form)) }); event.target.reset(); await load(); } catch (error) { document.querySelector('#error').textContent = error.message; } });
+    document.querySelector('#refresh').addEventListener('click', load); load();
+  </script>
+</body>
+</html>
