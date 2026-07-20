@@ -1,10 +1,10 @@
-name = "cloudflare-imgbed"
-main = "index.js"
+name = "cloudflare-imgbed-zero-cost"
+main = "deploy/worker/index.js"
 compatibility_date = "2026-07-01"
 compatibility_flags = ["global_fetch_strictly_public", "nodejs_compat"]
 
 [assets]
-directory = "../../frontend-dist"
+directory = "./frontend-dist"
 binding = "ASSETS"
 not_found_handling = "single-page-application"
 
@@ -21,6 +21,20 @@ D1_READ_SOFT_LIMIT = "3000000"
 D1_WRITE_SOFT_LIMIT = "60000"
 QUEUE_OPS_SOFT_LIMIT = "7000"
 
+[[d1_databases]]
+binding = "DB"
+database_name = "cloudflare-imgbed-zero-cost"
+database_id = "replace-with-d1-database-id"
+migrations_dir = "./database/migrations"
+
+[[queues.producers]]
+binding = "STORAGE_QUEUE"
+queue = "imgbed-storage-zero-cost"
+
+[[queues.consumers]]
+queue = "imgbed-storage-zero-cost"
+max_batch_size = 5
+max_batch_timeout = 5
 
 [triggers]
 crons = ["*/15 * * * *", "15 */6 * * *"]
