@@ -2,8 +2,13 @@ import { r2Allowed } from '../config.js';
 import { StorageError, STORAGE_ERROR_CODES } from './adapter.js';
 import { WebDavAdapter } from '../../adapters/webdav/webdavAdapter.js';
 import { TelegramAdapter } from '../../adapters/telegram/telegramAdapter.js';
+import { S3Adapter } from '../../adapters/s3/s3Adapter.js';
 
-const factories = Object.freeze({ webdav: (channel, env, fetchImpl) => new WebDavAdapter(channel, env, fetchImpl), telegram: (channel, env, fetchImpl) => new TelegramAdapter(channel, env, fetchImpl) });
+const factories = Object.freeze({
+  webdav: (channel, env, fetchImpl) => new WebDavAdapter(channel, env, fetchImpl),
+  telegram: (channel, env, fetchImpl) => new TelegramAdapter(channel, env, fetchImpl),
+  s3: (channel, env) => new S3Adapter(channel, env),
+});
 
 export function getAdapter(channel, env, fetchImpl) {
   if (!channel?.provider) throw new StorageError({ provider: 'unknown', channelId: channel?.id, code: STORAGE_ERROR_CODES.INVALID_CONFIGURATION, message: 'Storage channel provider is required' });

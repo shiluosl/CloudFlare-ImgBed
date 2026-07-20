@@ -6,6 +6,7 @@ import { d1ReadsPerSampledV3Request, recordWorkerRequestEstimate, shouldEstimate
 import { assertFileTransition, assertReplicaTransition, assertJobTransition } from '../functions/core/state/statusMachine.js';
 import { WebDavAdapter } from '../functions/adapters/webdav/webdavAdapter.js';
 import { TelegramAdapter } from '../functions/adapters/telegram/telegramAdapter.js';
+import { S3Adapter } from '../functions/adapters/s3/s3Adapter.js';
 import { UploadService } from '../functions/core/upload/uploadService.js';
 import { FileService } from '../functions/core/files/fileService.js';
 import { ZeroCostGuard } from '../functions/core/cost/zeroCostGuard.js';
@@ -13,13 +14,14 @@ import { JobService } from '../functions/core/jobs/jobService.js';
 import { assertExternalEndpoint } from '../functions/core/security/endpointValidation.js';
 import { executeStorageJob, isExecutableStorageJob } from '../functions/queues/storageConsumer.js';
 import { inspectZeroCostFiles } from '../scripts/zero-cost-check.mjs';
-import { hasSensitiveConfig } from '../functions/api/manage/ops/channels.js';
+import { hasSensitiveConfig, validSecretRefs, validateChannelConfig } from '../functions/api/manage/ops/channels.js';
 import { ChannelHealthService } from '../functions/core/health/channelHealthService.js';
 import { selectRotatingCriticalReplicaMaintenance, selectRotatingHealthCheckChannels, selectRotatingReplicaMaintenance, scheduleReplicaMaintenance } from '../functions/scheduled/maintenance.js';
 import { onRequestPatch as patchChannel } from '../functions/api/manage/ops/channels.js';
 import { onRequestPost as createPolicy } from '../functions/api/manage/ops/policies.js';
 import { v3ReadEnabled, v3UploadEnabled } from '../functions/core/config.js';
 import { StorageOrchestrator } from '../functions/core/storage/orchestrator.js';
+import { uploadFiles } from '../functions/api/manage/ops/upload.js';
 import { execFileSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -67,6 +69,38 @@ describe('Telegram adapter contract', () => {
   });
 });
 
+describe('S3-compatible adapter contract', () => {
+  it('streams put, get, head, delete, and health checks through the common contract', async () => {
+    const commands = [];
+    const client = { async send(command) {
+      commands.push(command);
+      if (command.constructor.name === 'GetObjectCommand') return { Body: new Blob(['abc']), ContentLength: 3, ContentType: 'text/plain', ETag: 'etag' };
+      if (command.constructor.name === 'HeadObjectCommand') return { ContentLength: 3, ETag: 'etag', ChecksumSHA256: 'checksum' };
+      if (command.constructor.name === 'PutObjectCommand') return { ETag: 'etag', ChecksumSHA256: 'checksum' };
+      return { $metadata: { httpStatusCode: 200 } };
+    } };
+    const adapter = new S3Adapter({ id: 's3', config: { endpoint: 'https://s3.example.test', bucketName: 'imgbed-backups', region: 'auto' }, secretRefs: { accessKeyIdRef: 'S3_ACCESS_KEY_ID', secretAccessKeyRef: 'S3_SECRET_ACCESS_KEY' } }, {}, () => client);
+    const stored = await adapter.put({ objectKey: 'a.txt', body: new Blob(['abc']), size: 3, contentType: 'text/plain' });
+    assert.equal(stored.etag, 'etag');
+    assert.equal((await adapter.head({ objectKey: 'a.txt' })).checksum, 'checksum');
+    assert.equal(await (await adapter.get({ objectKey: 'a.txt' })).text(), 'abc');
+    await adapter.delete({ objectKey: 'a.txt' });
+    await adapter.healthCheck();
+    assert.deepEqual(commands.map(command => command.constructor.name), ['PutObjectCommand', 'HeadObjectCommand', 'GetObjectCommand', 'DeleteObjectCommand', 'HeadBucketCommand']);
+  });
+
+  it('maps S3 missing objects, credentials, and unsafe endpoint configuration', async () => {
+    const missingClient = { async send() { throw Object.assign(new Error('missing'), { name: 'NoSuchKey', $metadata: { httpStatusCode: 404 } }); } };
+    const channel = { id: 's3', config: { endpoint: 'https://s3.example.test', bucketName: 'imgbed-backups' }, secretRefs: { accessKeyIdRef: 'S3_ACCESS_KEY_ID', secretAccessKeyRef: 'S3_SECRET_ACCESS_KEY' } };
+    const adapter = new S3Adapter(channel, {}, () => missingClient);
+    await assert.doesNotReject(() => adapter.delete({ objectKey: 'gone.txt' }));
+    assert.throws(() => new S3Adapter({ ...channel, config: { ...channel.config, endpoint: 'http://127.0.0.1:9000' } }, { S3_ACCESS_KEY_ID: 'id', S3_SECRET_ACCESS_KEY: 'secret' }).clientForChannel(), error => error.code === STORAGE_ERROR_CODES.INVALID_CONFIGURATION);
+    assert.equal(validSecretRefs('s3', channel.secretRefs), true);
+    assert.equal(validSecretRefs('s3', { accessKeyIdRef: 'S3_ACCESS_KEY_ID' }), false);
+    assert.doesNotThrow(() => validateChannelConfig('s3', channel.config));
+  });
+});
+
 describe('upload disaster recovery workflow', () => {
   it('records available, degraded, failed, strict, fast, and idempotent uploads', async () => {
     const repo = new UploadMemoryRepository();
@@ -94,6 +128,15 @@ describe('upload disaster recovery workflow', () => {
     await assert.rejects(() => service.upload({ ...input, idempotencyKey: 'strict-failed', mode: 'strict', body: new Blob(['abc']) }), /Strict upload/);
     const fast = await service.upload({ ...input, idempotencyKey: 'fast-mode', mode: 'fast', body: new Blob(['abc']) });
     assert.equal(fast.file.status, 'degraded');
+    await assert.rejects(() => service.upload({ ...input, idempotencyKey: 'invalid-mode', mode: 'unbounded', body: new Blob(['abc']) }), /Unsupported upload mode/);
+  });
+
+  it('accepts at most five multipart files at the route boundary', () => {
+    const five = new FormData();
+    for (let index = 0; index < 5; index += 1) five.append('file', new File(['x'], `file-${index}.txt`, { type: 'text/plain' }));
+    assert.equal(uploadFiles(five).length, 5);
+    five.append('file', new File(['x'], 'file-5.txt', { type: 'text/plain' }));
+    assert.equal(uploadFiles(five).length, 6);
   });
 
   it('queues async replicas without adding them to the synchronous write set', async () => {
@@ -201,6 +244,7 @@ describe('read, delete, and queue recovery', () => {
     assert.equal(await result.response.text(), 'backup');
     assert.equal(repository.replicas[0].status, 'suspect');
     assert.equal(jobs.records[0].operation, 'REPAIR_REPLICA');
+    assert.equal(repository.audits[0].action, 'file.readFallback');
     storage.openReplica = async () => { throw new Error('offline'); };
     assert.equal((await service.read('file_1', new Request('https://example.test/file/file_1'))).response.status, 503);
   });
@@ -367,6 +411,20 @@ describe('zero-cost controls and security', () => {
       assert.ok(inspectZeroCostFiles(base).some(message => message.includes('R2 binding')));
     } finally { rmSync(base, { recursive: true, force: true }); }
   });
+  it('fails the zero-cost scan when V3 source accesses an R2 binding', () => {
+    const base = mkdtempSync(join(tmpdir(), 'imgbed-zero-cost-v3-r2-'));
+    try {
+      for (const dir of ['deploy/worker', '.github/workflows', 'functions/core/storage', 'functions/adapters/s3']) mkdirSync(join(base, dir), { recursive: true });
+      writeFileSync(join(base, 'deploy/worker/wrangler.toml'), '[vars]\nZERO_COST_MODE = "true"\nALLOW_R2 = "false"\n');
+      writeFileSync(join(base, 'deploy/worker/generate-toml.js'), '');
+      writeFileSync(join(base, '.github/workflows/deploy-worker.yml'), '');
+      writeFileSync(join(base, 'wrangler.toml.example'), '');
+      writeFileSync(join(base, 'functions/core/storage/registry.js'), "if (provider === 'r2' && !r2Allowed) throw new Error('disabled');");
+      writeFileSync(join(base, 'deploy/worker/index.js'), "function zeroCostEnvironment(property) { return property === 'img_r2'; }");
+      writeFileSync(join(base, 'functions/adapters/s3/s3Adapter.js'), 'export const forbidden = env.R2;');
+      assert.ok(inspectZeroCostFiles(base).some(message => message.includes('forbidden R2 binding')));
+    } finally { rmSync(base, { recursive: true, force: true }); }
+  });
   it('requires real V3 bindings for a deployment configuration', () => {
     const path = 'deploy/worker/wrangler.toml';
     const original = readFileSync(path, 'utf8');
@@ -393,6 +451,7 @@ describe('zero-cost controls and security', () => {
     assert.equal(hasSensitiveConfig({ baseUrl: 'https://storage.example/dav' }), false);
     assert.equal(hasSensitiveConfig({ password: 'not-allowed' }), true);
     assert.equal(hasSensitiveConfig({ botToken: 'not-allowed' }), true);
+    assert.equal(hasSensitiveConfig({ accessKeyId: 'not-allowed' }), true);
   });
   it('rejects redirecting and plaintext-credential adapter configuration', async () => {
     const redirecting = new WebDavAdapter({ id: 'webdav', config: { baseUrl: 'https://storage.example/dav' } }, {}, async () => new Response(null, { status: 302 }));
@@ -438,6 +497,7 @@ class FileMemoryRepository {
     this.file = { id: 'file_1', generation: 1, status: 'available', name: 'demo.html', content_type: 'text/html', is_public: 1, size: 6 };
     this.replicas = [{ id: 'primary', channel_id: 'webdav', status: 'healthy', role: 'primary', enabled: 1, health_status: 'healthy' }, { id: 'backup', channel_id: 'telegram', status: 'healthy', role: 'sync_backup', enabled: 1, health_status: 'healthy' }];
     this.tombstone = null;
+    this.audits = [];
   }
   async getFile() { return this.file; }
   async getTombstone() { return this.tombstone; }
@@ -445,6 +505,7 @@ class FileMemoryRepository {
   async updateReplica(id, patch) { Object.assign(this.replicas.find(item => item.id === id), patch); }
   async createTombstone(_id, generation) { this.file.status = 'deleting'; this.file.generation = generation + 1; this.tombstone = { generation: this.file.generation }; return this.tombstone; }
   async finalizeDeletion() { if (this.replicas.every(item => item.status === 'deleted')) this.file.status = 'deleted'; return this.file; }
+  async audit(entry) { this.audits.push(entry); }
 }
 
 function readOnlyD1() {

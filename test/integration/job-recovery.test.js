@@ -58,6 +58,25 @@ describe('D1 job and Queue recovery integration', () => {
     assert.equal(repository.job.status, 'cancelled');
     assert.equal(message.acks, 1);
   });
+
+  it('marks exhausted deletion as delete_degraded and later completes the same tombstoned deletion', async () => {
+    const repository = new DeletionRecoveryRepository();
+    const failingMessage = queueMessage('job_delete_recovery');
+    const failingApp = deletionApp(repository, async () => { throw Object.assign(new Error('remote offline'), { code: 'NETWORK_ERROR' }); });
+    await consumeStorageJobs({ messages: [failingMessage] }, {}, () => failingApp);
+    assert.equal(repository.job.status, 'dead');
+    assert.equal(repository.file.status, 'delete_degraded');
+    assert.equal(failingMessage.acks, 1);
+
+    repository.job.status = 'queued';
+    repository.job.attempts = 0;
+    const recoveryMessage = queueMessage('job_delete_recovery');
+    const recoveryApp = deletionApp(repository, async () => ({ deleted: true }));
+    await consumeStorageJobs({ messages: [recoveryMessage] }, {}, () => recoveryApp);
+    assert.equal(repository.replica.status, 'deleted');
+    assert.equal(repository.file.status, 'deleted');
+    assert.equal(repository.job.status, 'succeeded');
+  });
 });
 
 function jobInput(id) {
@@ -154,12 +173,39 @@ class ConsumerRepository {
   async updateJob(_id, status) { this.job.status = status; return this.job; }
 }
 
+class DeletionRecoveryRepository {
+  constructor() {
+    this.job = { ...jobInput('job_delete_recovery'), replica_id: 'replica_1', channel_id: 'channel_1', operation: 'DELETE_REPLICA', generation: 2, status: 'queued', attempts: 0, max_attempts: 1 };
+    this.file = { id: 'file_1', generation: 2, status: 'deleting' };
+    this.tombstone = { file_id: 'file_1', generation: 2 };
+    this.replica = { id: 'replica_1', channel_id: 'channel_1', object_key: 'file_1/a.txt', remote_id: null, remote_metadata_json: '{}', status: 'deleting' };
+  }
+  async claimJob(id) { if (id !== this.job.id || !['pending', 'queued', 'retry_wait'].includes(this.job.status)) return null; this.job.status = 'running'; this.job.attempts += 1; return this.job; }
+  async getFile() { return this.file; }
+  async getTombstone() { return this.tombstone; }
+  async getReplica() { return this.replica; }
+  async updateReplica(_id, patch) { Object.assign(this.replica, patch); return this.replica; }
+  async updateFileStatus(_id, status) { this.file.status = status; return this.file; }
+  async updateJob(_id, status) { this.job.status = status; return this.job; }
+  async finalizeDeletion() { if (this.replica.status === 'deleted') this.file.status = 'deleted'; return this.file; }
+}
+
 function consumerApp(repository) {
   return {
     repository,
     guard: { async assertRepair() {}, async assertAsyncReplica() {}, async assertVerify() {}, async assertDelete() {} },
     health: { async recordFailure() {}, async recordSuccess() {} },
     storage: { recounts: 0, async recomputeFileHealth() { this.recounts += 1; } },
+  };
+}
+
+function deletionApp(repository, remove) {
+  return {
+    repository,
+    adapterFor: async () => ({ delete: remove }),
+    guard: { async assertDelete() {} },
+    health: { async recordFailure() {}, async recordSuccess() {} },
+    storage: { async recomputeFileHealth() {} },
   };
 }
 
