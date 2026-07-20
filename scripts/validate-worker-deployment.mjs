@@ -14,8 +14,8 @@ if (!/\[\[queues\.producers\]\][\s\S]*?binding\s*=\s*"STORAGE_QUEUE"/m.test(conf
 if (!/\[\[queues\.consumers\]\]/m.test(config)) {
   failures.push('V3 deployment requires a Queue consumer binding');
 }
-if (/r2_buckets|workers_ai|vectorize|browser[_ -]?rendering|\bcontainers\b/i.test(config)) {
-  failures.push('Worker configuration contains a forbidden paid Cloudflare binding');
+if (/r2_buckets|kv_namespaces|workers_ai|vectorize|browser[_ -]?rendering|\bcontainers\b/i.test(config)) {
+  failures.push('Worker configuration contains a forbidden Zero-Cost binding');
 }
 
 if (failures.length) {
@@ -23,4 +23,4 @@ if (failures.length) {
   process.exit(1);
 }
 
-console.log('Worker deployment bindings validated: DB and STORAGE_QUEUE are configured with no paid bindings.');
+console.log('Worker deployment bindings validated: DB and STORAGE_QUEUE are configured with no forbidden Zero-Cost bindings.');

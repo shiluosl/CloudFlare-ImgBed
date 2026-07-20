@@ -51,3 +51,7 @@ Upstream legacy code still contains historical R2 behavior for compatibility. In
 ## ADR-013: Availability requires the required synchronous replicas
 
 `available` means the primary and synchronous backup are healthy. Healthy asynchronous replicas remain useful for repair and read recovery, but they cannot hide a failed required backup. Upload preflight also rejects a policy whose required channel is already disabled, offline, or quota-blocked before creating the logical file record. V3 uploads enforce a bounded MIME-to-extension policy; environment variables can narrow the default set, while new MIME families require an explicit code review and mapping.
+
+## ADR-014: The V3 Worker deployment uses no KV namespace binding
+
+The strict zero-cost V3 resource allowlist is limited to Workers, D1, Queues, static assets, Cache API, and optional Turnstile. The deployment generator rejects `KV_NAMESPACE_ID`, generated deployment TOML cannot contain `[[kv_namespaces]]`, and CI validates that boundary. Historical upstream Pages/Docker compatibility code may still mention KV, but it is not a V3 Worker deployment dependency.

@@ -38,7 +38,6 @@ jobs:
         env:
           WORKER_NAME: ${{ inputs.worker_name || secrets.WORKER_NAME }}
           D1_DATABASE_ID: ${{ secrets.D1_DATABASE_ID }}
-          KV_NAMESPACE_ID: ${{ secrets.KV_NAMESPACE_ID }}
           STORAGE_QUEUE_NAME: ${{ secrets.STORAGE_QUEUE_NAME }}
           WORKER_VARS: ${{ secrets.WORKER_VARS }}
         run: |

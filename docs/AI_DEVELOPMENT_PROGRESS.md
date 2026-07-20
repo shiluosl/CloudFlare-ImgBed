@@ -2,7 +2,7 @@
 
 ## Current phase
 
-Phase 12 and the final deployment and operations hardening follow-up are complete on `feature/zero-cost-dr-v3`. The follow-up closes deployment-binding, legacy-R2 isolation, rollback-flag, management-surface, transition-audit, durable-Queue, and upload-state gaps identified in a post-implementation audit.
+Phase 12 and the final deployment and operations hardening follow-up are complete on `feature/zero-cost-dr-v3`. The follow-up closes deployment-binding, legacy-R2 isolation, legacy-KV deployment isolation, rollback-flag, management-surface, transition-audit, durable-Queue, and upload-state gaps identified in a post-implementation audit.
 
 ## Completed
 
@@ -22,6 +22,7 @@ Phase 12 and the final deployment and operations hardening follow-up are complet
 - Preflight required synchronous channels before file creation, so an already offline/disabled/quota-blocked channel cannot leave an orphaned `receiving` file.
 - Defined `available` using the primary plus synchronous backup only; optional async copies cannot mask a missing required replica.
 - Added a bounded V3 MIME/extension policy, with environment variables that can narrow the reviewed default set.
+- Removed the optional KV namespace binding from the V3 deployment generator and deployment workflow; `KV_NAMESPACE_ID` is now rejected both directly and through `WORKER_VARS`, while CI verifies that generated V3 Workers use only `ASSETS`, D1, and Queue bindings.
 
 ## Not completed / deliberate limits
 
@@ -62,6 +63,7 @@ Phase 12 and the final deployment and operations hardening follow-up are complet
 - `0cf5790` `fix(core): harden V3 rollback and state auditing`
 - `d661fa4` `feat(admin): expand zero-cost storage operations`
 - Latest: `test(dr): harden required replica semantics and queue recovery coverage` (see Git history for the immutable commit ID).
+- Latest deployment-isolation patch: `fix(deploy): exclude KV from zero-cost V3 Worker bindings` (see Git history for the immutable commit ID).
 
 ## Key decisions
 

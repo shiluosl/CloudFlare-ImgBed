@@ -9,6 +9,9 @@ const required = [
   ['deploy/worker/generate-toml.js', /\[\[r2_buckets\]\]/i, 'Deployment generator can create an R2 binding'],
   ['.github/workflows/deploy-worker.yml', /R2_BUCKET_NAME/i, 'Deployment workflow passes an R2 setting'],
   ['wrangler.toml.example', /r2_buckets/i, 'Example Worker configuration declares an R2 binding'],
+  ['deploy/worker/wrangler.toml', /\[\[kv_namespaces\]\]/i, 'V3 Worker configuration declares a forbidden KV binding'],
+  ['deploy/worker/generate-toml.js', /\[\[kv_namespaces\]\]/i, 'Deployment generator can create a forbidden KV binding'],
+  ['.github/workflows/deploy-worker.yml', /KV_NAMESPACE_ID/i, 'Deployment workflow passes a forbidden KV setting'],
 ];
 const forbiddenBinding = [
   /\bworkers_ai\s*=|\bai\s*=/i,
@@ -54,5 +57,5 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
     console.error(failures.join('\n'));
     process.exit(1);
   }
-  console.log('Zero-Cost resource check passed. No R2 binding or paid Cloudflare resource binding was found.');
+  console.log('Zero-Cost resource check passed. No forbidden R2, KV, or paid Cloudflare resource binding was found.');
 }

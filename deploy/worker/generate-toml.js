@@ -12,8 +12,8 @@ const env = process.env;
 const name = env.WORKER_NAME || 'cloudflare-imgbed';
 const requireBindings = process.argv.includes('--require-bindings') || env.REQUIRE_STORAGE_BINDINGS === 'true';
 
-if (Object.keys(env).some(key => /(^|_)R2(_|$)|WORKERS_AI|VECTORIZ|BROWSER.*RENDER|CONTAINERS/i.test(key))) {
-  throw new Error('A paid Cloudflare resource setting is forbidden by the Zero-Cost deployment generator');
+if (Object.keys(env).some(key => /(^|_)R2(_|$)|WORKERS_AI|VECTORIZ|BROWSER.*RENDER|CONTAINERS|KV_NAMESPACE_ID/i.test(key))) {
+  throw new Error('A forbidden Cloudflare resource setting is present in the Zero-Cost deployment generator');
 }
 
 const extraVars = parseWorkerVars(env.WORKER_VARS);
@@ -62,14 +62,6 @@ migrations_dir = "../../database/migrations"
 `;
 }
 
-if (env.KV_NAMESPACE_ID) {
-  toml += `
-[[kv_namespaces]]
-binding = "img_url"
-id = "${escapeToml(env.KV_NAMESPACE_ID)}"
-`;
-}
-
 if (hasQueueBinding) {
   const queue = escapeToml(env.STORAGE_QUEUE_NAME);
   toml += `
@@ -107,7 +99,7 @@ function parseWorkerVars(raw) {
     const vars = JSON.parse(raw);
     for (const key of Object.keys(vars)) {
       if (['ZERO_COST_MODE', 'ALLOW_R2'].includes(key)) continue;
-      if (/(^|_)R2(_|$)|WORKERS_AI|VECTORIZ|BROWSER.*RENDER|CONTAINERS/i.test(key)) {
+      if (/(^|_)R2(_|$)|WORKERS_AI|VECTORIZ|BROWSER.*RENDER|CONTAINERS|KV_NAMESPACE_ID/i.test(key)) {
         throw new Error(`WORKER_VARS contains forbidden key ${key}`);
       }
     }

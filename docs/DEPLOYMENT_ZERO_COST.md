@@ -11,7 +11,7 @@ npx.cmd wrangler d1 create cloudflare-imgbed-zero-cost
 npx.cmd wrangler queues create imgbed-storage-zero-cost
 ```
 
-The checked-in `deploy/worker/wrangler.toml` is intentionally CI-safe and has no account-specific identifiers. Before a real deployment, set the following shell variables. `npm run deploy:worker` regenerates the file and refuses to deploy unless both V3 bindings are present. There must be no R2 binding.
+The checked-in `deploy/worker/wrangler.toml` is intentionally CI-safe and has no account-specific identifiers. Before a real deployment, set the following shell variables. `npm run deploy:worker` regenerates the file and refuses to deploy unless both V3 bindings are present. The V3 Worker permits only `ASSETS`, `DB`, and `STORAGE_QUEUE` bindings: R2 and KV namespace bindings are rejected.
 
 ```powershell
 $env:D1_DATABASE_ID = "the-id-returned-by-wrangler-d1-create"
@@ -60,6 +60,6 @@ The checked-in cron triggers redispatch due D1 jobs every 15 minutes and perform
 
 - `ZERO_COST_MODE=true` and `ALLOW_R2=false` remain set.
 - `npm run check:zero-cost` passes.
-- Worker bindings contain `ASSETS`, `DB`, and optionally `STORAGE_QUEUE`; no R2 binding exists.
+- Worker bindings contain `ASSETS`, `DB`, and `STORAGE_QUEUE`; no R2 or KV namespace binding exists.
 - Create WebDAV and Telegram channels through the authenticated operations API, then create a safe policy with distinct failure domains.
 - Keep anonymous V3 upload disabled unless a Turnstile-verified route is added.
