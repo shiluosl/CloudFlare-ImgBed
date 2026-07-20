@@ -39,3 +39,11 @@ Adapter reads, writes, verification, deletion, and health probes report sanitize
 ## ADR-010: Secrets are references only in V3 adapters
 
 WebDAV and Telegram adapters only read credentials from configured Worker secret-reference names. Plaintext credentials in historical channel config are ignored, Authorization headers in config are rejected, and external redirects are refused instead of followed. This limits SSRF and credential-leak exposure in the V3 path.
+
+## ADR-011: Deployment bindings are generated only for a real deployment
+
+The repository does not commit a D1 database identifier or Queue name. `npm run deploy:worker` requires `D1_DATABASE_ID` and `STORAGE_QUEUE_NAME`, generates the Worker TOML for that command, then validates `DB` and `STORAGE_QUEUE` bindings before Wrangler runs. The checked-in TOML remains suitable for source inspection and configuration-only dry-runs, but cannot accidentally present itself as a functional V3 deployment.
+
+## ADR-012: Historical R2 paths are isolated and V3 has independent rollback flags
+
+Upstream legacy code still contains historical R2 behavior for compatibility. In Zero-Cost mode the generated Worker exposes a proxy environment that hides `img_r2` and `R2`, and it rejects the historical `uploadChannel=cfr2` request before routing. V3 upload and V3 logical read have independent `ENABLE_V3_UPLOAD` and `ENABLE_V3_READ` flags, so an operator can pause new logical uploads or roll reads back to the legacy route surface without enabling R2 or changing paid-resource configuration.

@@ -2,7 +2,7 @@
 
 ## Current phase
 
-Phase 12 and the hardening follow-up are complete on `feature/zero-cost-dr-v3`. The final follow-up closes data-consistency, guard-policy, endpoint-security, and migration-test gaps identified in a post-implementation audit.
+Phase 12 and the final deployment and operations hardening follow-up are complete on `feature/zero-cost-dr-v3`. The follow-up closes deployment-binding, legacy-R2 isolation, rollback-flag, management-surface, and transition-audit gaps identified in a post-implementation audit.
 
 ## Completed
 
@@ -30,14 +30,15 @@ Phase 12 and the hardening follow-up are complete on `feature/zero-cost-dr-v3`. 
 
 - Branch: `feature/zero-cost-dr-v3`
 - Latest upstream baseline commit before this work: `07fe250`
- - Latest hardening verification passed on 2026-07-21:
-  - `npm.cmd test` - 17 passing, including executable V3 migration coverage
+- Final hardening verification passed on 2026-07-21:
+  - `node deploy/worker/generate-routes.js`
+  - `node scripts/zero-cost-check.mjs`
+  - `npm.cmd test` - 19 passing, including executable V3 migration coverage
   - `npm.cmd run lint`
   - `npm.cmd run check:migrations`
   - `npm.cmd run check:secrets`
   - `npm.cmd run build` - 52 routes, 9 catch-all routes
-  - `npx.cmd wrangler deploy --dry-run --config deploy/worker/wrangler.toml`
-  - `git diff --check`
+  - `frontend-dist/ops.html` inline JavaScript syntax validation
 
 ## Commits created
 
@@ -53,12 +54,16 @@ Phase 12 and the hardening follow-up are complete on `feature/zero-cost-dr-v3`. 
 - `6ffa4ec` `feat(admin): add storage operations dashboard`
 - `21ca4e6` `test(dr): add disaster recovery integration tests`
 - `7877ba3` `chore(ci): enforce zero-cost deployment checks`
+- `5855321` `fix(deploy): require D1 and Queue bindings for V3 worker`
+- `0cf5790` `fix(core): harden V3 rollback and state auditing`
+- `d661fa4` `feat(admin): expand zero-cost storage operations`
 
 ## Key decisions
 
 - D1 is the durable task source of truth; Queue messages contain only identifiers.
 - Tombstones advance the file generation and prevent late create/repair work from reviving a deleted file.
 - R2 is prohibited in the checked-in Worker config, deployment generator, V3 adapter registry, and CI scanner.
+- The checked-in deployment TOML is deliberately binding-free so it is safe for source control and static dry-runs. The real deployment command generates a short-lived binding configuration from operator-provided identifiers and validates it before Wrangler runs.
 
 ## Compatibility adjustments
 
@@ -68,12 +73,13 @@ Phase 12 and the hardening follow-up are complete on `feature/zero-cost-dr-v3`. 
 
 ## Next actions
 
-1. Apply `0030_zero_cost_dr_v3.sql` and then `0031_zero_cost_dr_health_leases.sql` to an operator-owned D1 database.
-2. Configure dedicated non-production WebDAV and Telegram credentials before external end-to-end tests.
-3. Open a pull request from `feature/zero-cost-dr-v3` after reviewing the external-provider test evidence.
+1. Push `feature/zero-cost-dr-v3` after local review.
+2. Apply `0030_zero_cost_dr_v3.sql` and then `0031_zero_cost_dr_health_leases.sql` to an operator-owned D1 database before a real deployment.
+3. Configure dedicated non-production WebDAV and Telegram credentials before external end-to-end tests.
 
 ## Known limits
 
 - The current test suite is local and mock-backed for external providers. No real WebDAV or Telegram credentials were used.
 - Legacy upstream R2 implementation files remain for compatibility, but the zero-cost Worker configuration contains no R2 binding and the V3 adapter/API paths reject R2.
+- The static `wrangler deploy --dry-run` uses the binding-free checked-in TOML; it validates generated Worker syntax and configuration only. A deployment-capable configuration is generated only by `npm run deploy:worker` with `D1_DATABASE_ID` and `STORAGE_QUEUE_NAME` supplied by the operator.
 - The upstream operations page is intentionally extended rather than redesigned; advanced bulk operations and provider-specific telemetry remain bounded by free-tier limits.
