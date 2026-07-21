@@ -1,4 +1,6 @@
 import { getDatabase } from '../../../utils/databaseAdapter.js';
+import { hasLegacyR2DefaultSelection } from '../../../core/security/zeroCostLegacyGuard.js';
+import { zeroCostEnabled } from '../../../core/config.js';
 
 export async function onRequest(context) {
     // 页面设置相关，GET方法读取设置，POST方法保存设置
@@ -27,6 +29,9 @@ export async function onRequest(context) {
     // POST保存设置
     if (request.method === 'POST') {
         const body = await request.json()
+        if (zeroCostEnabled(env) && hasLegacyR2DefaultSelection(body)) {
+            return Response.json({ error: 'Cloudflare R2 is disabled in zero-cost mode' }, { status: 400 })
+        }
         const previousSettings = await getPageConfig(db, env)
         const settings = processAnnouncementInfo(body, previousSettings)
 
@@ -318,6 +323,14 @@ export async function getPageConfig(db, env) {
         const index = config.findIndex(x => x.id === item.id)
         if (index !== -1) {
             config[index].value = item.value
+        }
+    }
+
+    if (zeroCostEnabled(env)) {
+        const defaultUploadChannel = config.find(item => item.id === 'defaultUploadChannel')
+        defaultUploadChannel.options = defaultUploadChannel.options.filter(option => option.value !== 'cfr2')
+        if (String(defaultUploadChannel.value || '').toLowerCase() === 'cfr2') {
+            delete defaultUploadChannel.value
         }
     }
 

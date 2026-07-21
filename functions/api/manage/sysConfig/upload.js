@@ -1,5 +1,7 @@
 import { getDatabase } from '../../../utils/databaseAdapter.js';
 import { normalizeWebDAVHeaders } from '../../../utils/storage/webdavAPI.js';
+import { emptyLegacyR2Config, hasLegacyR2Configuration } from '../../../core/security/zeroCostLegacyGuard.js';
+import { zeroCostEnabled } from '../../../core/config.js';
 
 export async function onRequest(context) {
     // 上传设置相关，GET方法读取设置，POST方法保存设置
@@ -29,6 +31,10 @@ export async function onRequest(context) {
     if (request.method === 'POST') {
         const body = await request.json()
         const settings = body
+
+        if (zeroCostEnabled(env) && hasLegacyR2Configuration(settings)) {
+            return Response.json({ error: 'Cloudflare R2 is disabled in zero-cost mode' }, { status: 400 })
+        }
 
         // 写入数据库
         await db.put('manage@sysConfig@upload', JSON.stringify(settings))
@@ -92,10 +98,12 @@ export async function getUploadConfig(db, env) {
 
 
     // =====================读取r2渠道配置=====================
-    const cfr2 = {}
+    const cfr2 = zeroCostEnabled(env) ? emptyLegacyR2Config() : {}
     const cfr2Channels = []
-    cfr2.channels = cfr2Channels
-    if (env.img_r2) {
+    if (!zeroCostEnabled(env)) {
+        cfr2.channels = cfr2Channels
+    }
+    if (!zeroCostEnabled(env) && env.img_r2) {
         cfr2Channels.push({
             id: 1,
             name: 'R2_env',
@@ -106,7 +114,7 @@ export async function getUploadConfig(db, env) {
             fixed: true,
         })
     }
-    for (const r2 of settingsKV.cfr2?.channels || []) {
+    for (const r2 of zeroCostEnabled(env) ? [] : settingsKV.cfr2?.channels || []) {
         // 如果savePath是environment variable，修改可变参数
         if (r2.savePath === 'environment variable') {
             // 如果环境变量未删除，进行覆盖操作
@@ -124,7 +132,7 @@ export async function getUploadConfig(db, env) {
     }
 
     // 负载均衡
-    const r2LoadBalance = settingsKV.cfr2?.loadBalance || {
+    const r2LoadBalance = zeroCostEnabled(env) ? cfr2.loadBalance : settingsKV.cfr2?.loadBalance || {
         enabled: false,
         channels: [],
     }

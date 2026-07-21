@@ -29,6 +29,8 @@ import { authorizePrivateV3Read } from '../functions/core/security/privateFileAc
 import { verifyTurnstile } from '../functions/core/security/turnstile.js';
 import { visibleUploadChannels } from '../functions/api/channels.js';
 import { isLegacyR2ChannelForbidden } from '../functions/core/security/zeroCostLegacyGuard.js';
+import { getUploadConfig, onRequest as uploadConfigRequest } from '../functions/api/manage/sysConfig/upload.js';
+import { getPageConfig, onRequest as pageConfigRequest } from '../functions/api/manage/sysConfig/page.js';
 import { execFileSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -152,6 +154,50 @@ describe('zero-cost DR core', () => {
     assert.equal(isLegacyR2ChannelForbidden({ ZERO_COST_MODE: 'true' }, 'cfr2'), true);
     assert.equal(isLegacyR2ChannelForbidden({ ZERO_COST_MODE: 'false' }, 'cfr2'), false);
     assert.equal(isLegacyR2ChannelForbidden({ ZERO_COST_MODE: 'true' }, 'telegram'), false);
+  });
+  it('removes historical R2 management configuration in zero-cost mode', async () => {
+    const values = new Map([
+      ['manage@sysConfig@upload', JSON.stringify({ cfr2: { channels: [{ name: 'historic-r2' }], loadBalance: { enabled: true, channels: ['historic-r2'] } } })],
+      ['manage@sysConfig@page', JSON.stringify({ config: [{ id: 'defaultUploadChannel', value: 'cfr2' }] })],
+    ]);
+    const db = { async get(key) { return values.get(key) || null; }, async put(key, value) { values.set(key, value); } };
+    const zeroCostEnv = { ZERO_COST_MODE: 'true', img_r2: { put() {} } };
+
+    const zeroCostUpload = await getUploadConfig(db, zeroCostEnv);
+    assert.deepEqual(zeroCostUpload.cfr2, { channels: [], loadBalance: { enabled: false, channels: [] } });
+    const compatibleUpload = await getUploadConfig(db, { ZERO_COST_MODE: 'false' });
+    assert.equal(compatibleUpload.cfr2.channels.length, 1);
+
+    const zeroCostPage = await getPageConfig(db, zeroCostEnv);
+    const zeroCostDefault = zeroCostPage.config.find(item => item.id === 'defaultUploadChannel');
+    assert.equal(zeroCostDefault.options.some(option => option.value === 'cfr2'), false);
+    assert.equal(Object.hasOwn(zeroCostDefault, 'value'), false);
+    const compatiblePage = await getPageConfig(db, { ZERO_COST_MODE: 'false' });
+    const compatibleDefault = compatiblePage.config.find(item => item.id === 'defaultUploadChannel');
+    assert.equal(compatibleDefault.options.some(option => option.value === 'cfr2'), true);
+    assert.equal(compatibleDefault.value, 'cfr2');
+
+    const uploadResponse = await uploadConfigRequest({
+      request: new Request('https://example.test/api/manage/sysConfig/upload', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ cfr2: { channels: [{ name: 'blocked' }] } }) }),
+      env: { ...zeroCostEnv, img_url: db },
+    });
+    assert.equal(uploadResponse.status, 400);
+    assert.match((await uploadResponse.json()).error, /R2 is disabled/);
+    assert.match(values.get('manage@sysConfig@upload'), /historic-r2/);
+
+    const directR2Response = await uploadConfigRequest({
+      request: new Request('https://example.test/api/manage/sysConfig/upload', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ cfr2: { publicUrl: 'https://r2.example' } }) }),
+      env: { ...zeroCostEnv, img_url: db },
+    });
+    assert.equal(directR2Response.status, 400);
+
+    const pageResponse = await pageConfigRequest({
+      request: new Request('https://example.test/api/manage/sysConfig/page', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ config: [{ id: 'defaultUploadChannel', value: 'cfr2' }] }) }),
+      env: { ...zeroCostEnv, img_url: db },
+    });
+    assert.equal(pageResponse.status, 400);
+    assert.match((await pageResponse.json()).error, /R2 is disabled/);
+    assert.match(values.get('manage@sysConfig@page'), /cfr2/);
   });
   it('only lets channel configuration narrow adapter capabilities', () => {
     const telegram = effectiveChannelCapabilities({ provider: 'telegram', capabilities_json: '{"write":false,"checksum":true,"maxObjectSize":1024}' });
