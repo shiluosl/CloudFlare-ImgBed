@@ -90,7 +90,7 @@ Phase 12 and the final capability-contract and SSRF-boundary audit are complete 
 - Latest reconciliation patch: `feat(repair): add bounded replica reconciliation`.
 - Final follow-up change set: sampled Worker/D1-read usage, bounded metadata estimates, policy health/quota enforcement, rate-paused upload preflight, complete policy operations controls, and pre-deploy binding validation.
 - Latest S3/coverage patch: `e371224` `feat(storage): add optional S3-compatible DR adapter`.
-- Final capability-contract/SSRF patch: effective capability enforcement, configured per-channel object-size limits, guarded deletion retries, and expanded private-endpoint rejection. Regression verification passed; its commit is recorded in Git history.
+- Final capability-contract/SSRF implementation: `d7d5448` `fix(storage): enforce channel capability contracts`. It adds effective capability enforcement, configured per-channel object-size limits, guarded deletion retries, and expanded private-endpoint rejection; regression verification passed.
 
 ## Key decisions
 
