@@ -3,17 +3,25 @@ import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
+const workerConfigFiles = [
+  'deploy/worker/wrangler.toml',
+  'wrangler.toml.example',
+  'deploy/worker/wrangler.toml.example',
+];
 const required = [
   ['deploy/worker/wrangler.toml', /r2_buckets/i, 'Worker configuration declares an R2 binding'],
   ['deploy/worker/wrangler.toml', /ALLOW_R2\s*=\s*"true"/i, 'Worker configuration enables R2'],
   ['deploy/worker/generate-toml.js', /\[\[r2_buckets\]\]/i, 'Deployment generator can create an R2 binding'],
   ['.github/workflows/deploy-worker.yml', /R2_BUCKET_NAME/i, 'Deployment workflow passes an R2 setting'],
   ['wrangler.toml.example', /r2_buckets/i, 'Example Worker configuration declares an R2 binding'],
+  ['deploy/worker/wrangler.toml.example', /r2_buckets/i, 'Deployment Worker template declares an R2 binding'],
   ['deploy/worker/wrangler.toml', /\[\[kv_namespaces\]\]/i, 'V3 Worker configuration declares a forbidden KV binding'],
   ['deploy/worker/generate-toml.js', /\[\[kv_namespaces\]\]/i, 'Deployment generator can create a forbidden KV binding'],
   ['.github/workflows/deploy-worker.yml', /KV_NAMESPACE_ID/i, 'Deployment workflow passes a forbidden KV setting'],
 ];
 const forbiddenBinding = [
+  /\[\[r2_buckets\]\]/i,
+  /\[\[kv_namespaces\]\]/i,
   /\bworkers_ai\s*=|\bai\s*=/i,
   /\bvectorize\s*=/i,
   /browser[_ -]?rendering\s*=/i,
@@ -47,7 +55,7 @@ export function inspectZeroCostFiles(baseDir = root) {
   for (const [file, pattern, message] of required) {
     if (pattern.test(read(file))) failures.push(`${message}: ${file}`);
   }
-  for (const file of ['deploy/worker/wrangler.toml', 'deploy/worker/generate-toml.js', 'wrangler.toml.example']) {
+  for (const file of [...workerConfigFiles, 'deploy/worker/generate-toml.js']) {
     for (const pattern of forbiddenBinding) {
       if (pattern.test(read(file))) failures.push(`Forbidden paid Cloudflare resource in ${file}: ${pattern}`);
     }
@@ -70,8 +78,10 @@ export function inspectZeroCostFiles(baseDir = root) {
       if (pattern.test(content)) failures.push(`${message}: ${file}`);
     }
   }
-  if (!/ZERO_COST_MODE\s*=\s*"true"/.test(read('deploy/worker/wrangler.toml'))) failures.push('ZERO_COST_MODE must default to true');
-  if (!/ALLOW_R2\s*=\s*"false"/.test(read('deploy/worker/wrangler.toml'))) failures.push('ALLOW_R2 must default to false');
+  for (const file of workerConfigFiles) {
+    if (!/ZERO_COST_MODE\s*=\s*"true"/.test(read(file))) failures.push(`ZERO_COST_MODE must default to true: ${file}`);
+    if (!/ALLOW_R2\s*=\s*"false"/.test(read(file))) failures.push(`ALLOW_R2 must default to false: ${file}`);
+  }
   return failures;
 }
 

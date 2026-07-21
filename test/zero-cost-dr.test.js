@@ -497,6 +497,24 @@ describe('zero-cost controls and security', () => {
       assert.ok(inspectZeroCostFiles(base).some(message => message.includes('R2 binding')));
     } finally { rmSync(base, { recursive: true, force: true }); }
   });
+  it('scans the checked-in deployment Worker template for forbidden bindings', () => {
+    const base = mkdtempSync(join(tmpdir(), 'imgbed-zero-cost-template-'));
+    try {
+      for (const dir of ['deploy/worker', '.github/workflows', 'functions/core/storage', 'functions/adapters/s3', 'functions/adapters/webdav', 'functions/adapters/telegram', 'functions/api/manage/ops']) mkdirSync(join(base, dir), { recursive: true });
+      writeFileSync(join(base, 'deploy/worker/wrangler.toml'), '[vars]\nZERO_COST_MODE = "true"\nALLOW_R2 = "false"\n');
+      writeFileSync(join(base, 'wrangler.toml.example'), '[vars]\nZERO_COST_MODE = "true"\nALLOW_R2 = "false"\n');
+      writeFileSync(join(base, 'deploy/worker/wrangler.toml.example'), '[vars]\nZERO_COST_MODE = "true"\nALLOW_R2 = "false"\n[[r2_buckets]]\nbinding = "R2"\nbucket_name = "forbidden"\n[[kv_namespaces]]\nbinding = "KV"\nid = "forbidden"\n');
+      writeFileSync(join(base, 'deploy/worker/generate-toml.js'), '');
+      writeFileSync(join(base, '.github/workflows/deploy-worker.yml'), '');
+      writeFileSync(join(base, 'functions/core/storage/registry.js'), "if (provider === 'r2' && !r2Allowed) throw new Error('disabled');");
+      writeFileSync(join(base, 'deploy/worker/index.js'), "function zeroCostEnvironment(property) { return property === 'img_r2'; }");
+      for (const file of ['functions/core/storage/orchestrator.js', 'functions/adapters/webdav/webdavAdapter.js', 'functions/adapters/telegram/telegramAdapter.js', 'functions/adapters/s3/s3Adapter.js', 'functions/api/manage/ops/channels.js']) writeFileSync(join(base, file), '');
+      const failures = inspectZeroCostFiles(base);
+      assert.ok(failures.some(message => message.includes('Deployment Worker template declares an R2 binding')));
+      assert.ok(failures.some(message => message.includes('Forbidden paid Cloudflare resource in deploy/worker/wrangler.toml.example')));
+      assert.ok(failures.some(message => message.includes('kv_namespaces')));
+    } finally { rmSync(base, { recursive: true, force: true }); }
+  });
   it('fails the zero-cost scan when V3 source accesses an R2 binding', () => {
     const base = mkdtempSync(join(tmpdir(), 'imgbed-zero-cost-v3-r2-'));
     try {
