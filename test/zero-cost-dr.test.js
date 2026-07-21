@@ -15,7 +15,7 @@ import { JobService } from '../functions/core/jobs/jobService.js';
 import { assertExternalEndpoint } from '../functions/core/security/endpointValidation.js';
 import { executeStorageJob, isExecutableStorageJob } from '../functions/queues/storageConsumer.js';
 import { inspectZeroCostFiles } from '../scripts/zero-cost-check.mjs';
-import { hasSensitiveConfig, validSecretRefs, validateChannelConfig } from '../functions/api/manage/ops/channels.js';
+import { hasSensitiveConfig, validSecretRefs, validateChannelConfig, validateChannelUpdate } from '../functions/api/manage/ops/channels.js';
 import { ChannelHealthService } from '../functions/core/health/channelHealthService.js';
 import { selectRotatingCriticalReplicaMaintenance, selectRotatingHealthCheckChannels, selectRotatingReplicaMaintenance, scheduleReplicaMaintenance } from '../functions/scheduled/maintenance.js';
 import { onRequestPatch as patchChannel } from '../functions/api/manage/ops/channels.js';
@@ -683,6 +683,52 @@ describe('zero-cost controls and security', () => {
     assert.equal((await channel.json()).code, 'ZERO_COST_GUARD');
     assert.equal((await policy.json()).code, 'ZERO_COST_GUARD');
   });
+  it('updates only channel failure domains and priorities with an audit record', async () => {
+    const db = channelMutationD1();
+    const response = await patchChannel({
+      request: new Request('https://example.test/api/manage/ops/channels', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ channelId: 'channel_1', action: 'update', failureDomain: 'telegram-region-b', priority: 25 }),
+      }),
+      env: { DB: db },
+    });
+    assert.equal(response.status, 200);
+    assert.equal(db.channel.failure_domain, 'telegram-region-b');
+    assert.equal(db.channel.priority, 25);
+    assert.equal(db.audits.length, 1);
+    assert.equal(db.audits[0].action, 'channel.updated');
+    assert.deepEqual(db.audits[0].details, { failureDomain: 'telegram-region-b', priority: 25 });
+  });
+  it('rejects invalid channel update values before persistence', async () => {
+    assert.throws(() => validateChannelUpdate({ priority: '3.5' }), /priority must be an integer/);
+    assert.throws(() => validateChannelUpdate({ priority: null }), /priority must be an integer/);
+    assert.throws(() => validateChannelUpdate({ failureDomain: ' ' }), /failureDomain must contain/);
+    const db = channelMutationD1();
+    const response = await patchChannel({
+      request: new Request('https://example.test/api/manage/ops/channels', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ channelId: 'channel_1', action: 'update', priority: -1 }),
+      }),
+      env: { DB: db },
+    });
+    assert.equal(response.status, 400);
+    assert.equal(db.updateCalls, 0);
+    assert.equal(db.audits.length, 0);
+  });
+  it('refuses channel metadata updates while the zero-cost guard is read-only', async () => {
+    const response = await patchChannel({
+      request: new Request('https://example.test/api/manage/ops/channels', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ channelId: 'channel_1', action: 'update', priority: 50 }),
+      }),
+      env: { DB: readOnlyD1() },
+    });
+    assert.equal(response.status, 503);
+    assert.equal((await response.json()).code, 'ZERO_COST_GUARD');
+  });
   it('enforces read-only writes while leaving reads outside the guard', async () => {
     const repository = { async getUsage() { return { uploads: 500 }; }, async incrementUsage() {}, async setProtectionLevel() {} };
     const guard = new ZeroCostGuard(repository, { DAILY_UPLOAD_SOFT_LIMIT: '500' });
@@ -898,4 +944,39 @@ function readOnlyD1() {
       };
     },
   };
+}
+
+function channelMutationD1() {
+  const db = {
+    channel: {
+      id: 'channel_1', name: 'Telegram', provider: 'telegram', enabled: 1, failure_domain: 'telegram-region-a', priority: 100,
+      health_status: 'healthy', config_json: '{}', secret_refs_json: '{"tokenRef":"TELEGRAM_TOKEN"}', capabilities_json: '{}',
+    },
+    audits: [],
+    updateCalls: 0,
+    prepare(sql) {
+      const statement = {
+        values: [],
+        bind(...values) { this.values = values; return this; },
+        async first() {
+          if (sql.includes('FROM usage_counters')) return { uploads: 0, worker_requests: 0, d1_reads: 0, d1_writes: 0, queue_operations: 0, protection_level: 'NORMAL' };
+          if (sql.includes('FROM storage_channels')) return db.channel;
+          return null;
+        },
+        async run() {
+          if (sql.includes('UPDATE storage_channels SET failure_domain')) {
+            db.updateCalls += 1;
+            db.channel.failure_domain = this.values[0];
+            db.channel.priority = this.values[1];
+          }
+          if (sql.includes('INSERT INTO audit_logs')) {
+            db.audits.push({ action: this.values[2], details: JSON.parse(this.values[6]) });
+          }
+          return { meta: { changes: 1 } };
+        },
+      };
+      return statement;
+    },
+  };
+  return db;
 }

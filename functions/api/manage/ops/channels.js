@@ -4,9 +4,76 @@ import { effectiveChannelCapabilities } from '../../../core/storage/capabilities
 import { ChannelHealthService } from '../../../core/health/channelHealthService.js';
 import { assertExternalEndpoint } from '../../../core/security/endpointValidation.js';
 
-export async function onRequestGet({ request, env }) { const app = runtime(env); const url = new URL(request.url); const channels = await app.repository.listChannels({ limit: url.searchParams.get('limit'), cursor: url.searchParams.get('cursor') }); return Response.json({ items: channels.map(publicChannel), nextCursor: channels.length ? channels.at(-1).cursor || null : null, allowedProviders: supportedProviders(), r2Disabled: true }); }
-export async function onRequestPost({ request, env }) { const body = await parseBody(request); if (!body) return invalidJson(); if (body.provider === 'r2') return Response.json({ error: 'R2 is disabled in Zero-Cost mode' }, { status: 400 }); if (!supportedProviders().includes(body.provider)) return Response.json({ error: 'Unsupported provider' }, { status: 400 }); if (!body.name || !body.failureDomain) return Response.json({ error: 'name and failureDomain are required' }, { status: 400 }); if (hasSensitiveConfig(body.config) || !validSecretRefs(body.provider, body.secretRefs)) return Response.json({ error: 'Credentials must be supplied as valid secret references, not channel config' }, { status: 400 }); try { validateChannelConfig(body.provider, body.config || {}); const app = runtime(env); await app.guard.assertWrite({ admin: true }); const channel = await app.repository.createChannel({ id: body.id || `channel_${crypto.randomUUID()}`, name: body.name, provider: body.provider, failureDomain: body.failureDomain, priority: body.priority, config: body.config || {}, secretRefs: body.secretRefs || {}, capabilities: body.capabilities || {} }); await app.repository.audit({ id: `audit_${crypto.randomUUID()}`, action: 'channel.created', targetType: 'storage_channel', targetId: channel.id, details: { provider: channel.provider } }); return Response.json(publicChannel(channel), { status: 201 }); } catch (error) { return operationError(error); } }
-export async function onRequestPatch({ request, env }) { const body = await parseBody(request); if (!body) return invalidJson(); if (!body.channelId) return Response.json({ error: 'channelId is required' }, { status: 400 }); if (!['enable', 'disable', 'health_check'].includes(body.action)) return Response.json({ error: 'Unsupported action' }, { status: 400 }); try { const app = runtime(env); await app.guard.assertWrite({ admin: true }); const channel = body.action === 'health_check' ? await new ChannelHealthService(app.repository, env).check(body.channelId) : await app.repository.setChannelEnabled(body.channelId, body.action === 'enable'); if (!channel) return Response.json({ error: 'Channel not found' }, { status: 404 }); await app.repository.audit({ id: `audit_${crypto.randomUUID()}`, action: `channel.${body.action}`, targetType: 'storage_channel', targetId: channel.id }); return Response.json(publicChannel(channel)); } catch (error) { return operationError(error); } }
+export async function onRequestGet({ request, env }) {
+  const app = runtime(env);
+  const url = new URL(request.url);
+  const channels = await app.repository.listChannels({ limit: url.searchParams.get('limit'), cursor: url.searchParams.get('cursor') });
+  return Response.json({ items: channels.map(publicChannel), nextCursor: channels.length ? channels.at(-1).cursor || null : null, allowedProviders: supportedProviders(), r2Disabled: true });
+}
+
+export async function onRequestPost({ request, env }) {
+  const body = await parseBody(request);
+  if (!body) return invalidJson();
+  if (body.provider === 'r2') return Response.json({ error: 'R2 is disabled in Zero-Cost mode' }, { status: 400 });
+  if (!supportedProviders().includes(body.provider)) return Response.json({ error: 'Unsupported provider' }, { status: 400 });
+  if (!body.name || !body.failureDomain) return Response.json({ error: 'name and failureDomain are required' }, { status: 400 });
+  if (hasSensitiveConfig(body.config) || !validSecretRefs(body.provider, body.secretRefs)) return Response.json({ error: 'Credentials must be supplied as valid secret references, not channel config' }, { status: 400 });
+  try {
+    const channelPatch = validateChannelUpdate(body);
+    validateChannelConfig(body.provider, body.config || {});
+    const app = runtime(env);
+    await app.guard.assertWrite({ admin: true });
+    const channel = await app.repository.createChannel({ id: body.id || `channel_${crypto.randomUUID()}`, name: body.name, provider: body.provider, failureDomain: channelPatch.failureDomain, priority: channelPatch.priority, config: body.config || {}, secretRefs: body.secretRefs || {}, capabilities: body.capabilities || {} });
+    await app.repository.audit({ id: `audit_${crypto.randomUUID()}`, action: 'channel.created', targetType: 'storage_channel', targetId: channel.id, details: { provider: channel.provider } });
+    return Response.json(publicChannel(channel), { status: 201 });
+  } catch (error) { return operationError(error); }
+}
+
+export async function onRequestPatch({ request, env }) {
+  const body = await parseBody(request);
+  if (!body) return invalidJson();
+  if (!body.channelId) return Response.json({ error: 'channelId is required' }, { status: 400 });
+  if (!['enable', 'disable', 'health_check', 'update'].includes(body.action)) return Response.json({ error: 'Unsupported action' }, { status: 400 });
+  try {
+    const app = runtime(env);
+    await app.guard.assertWrite({ admin: true });
+    const patch = body.action === 'update' ? validateChannelUpdate(body) : null;
+    const channel = body.action === 'health_check'
+      ? await new ChannelHealthService(app.repository, env).check(body.channelId)
+      : body.action === 'update'
+        ? await app.repository.updateChannel(body.channelId, patch)
+        : await app.repository.setChannelEnabled(body.channelId, body.action === 'enable');
+    if (!channel) return Response.json({ error: 'Channel not found' }, { status: 404 });
+    await app.repository.audit({
+      id: `audit_${crypto.randomUUID()}`,
+      action: body.action === 'update' ? 'channel.updated' : `channel.${body.action}`,
+      targetType: 'storage_channel',
+      targetId: channel.id,
+      details: body.action === 'update' ? patch : {},
+    });
+    return Response.json(publicChannel(channel));
+  } catch (error) { return operationError(error); }
+}
+
+export function validateChannelUpdate(body) {
+  const patch = {};
+  if (Object.hasOwn(body, 'failureDomain')) {
+    if (typeof body.failureDomain !== 'string') throw new Error('failureDomain must be a string');
+    const failureDomain = body.failureDomain.trim();
+    if (!failureDomain || failureDomain.length > 128) throw new Error('failureDomain must contain 1 to 128 characters');
+    patch.failureDomain = failureDomain;
+  }
+  if (Object.hasOwn(body, 'priority')) {
+    const rawPriority = body.priority;
+    if ((typeof rawPriority !== 'number' && typeof rawPriority !== 'string') || (typeof rawPriority === 'string' && !rawPriority.trim())) throw new Error('priority must be an integer between 0 and 100000');
+    const priority = Number(rawPriority);
+    if (!Number.isInteger(priority) || priority < 0 || priority > 100000) throw new Error('priority must be an integer between 0 and 100000');
+    patch.priority = priority;
+  }
+  if (!Object.keys(patch).length) throw new Error('failureDomain or priority is required');
+  return patch;
+}
+
 function publicChannel(channel) { const { config_json, secret_refs_json, ...rest } = channel; return { ...rest, config: safeConfig(config_json), capabilities: effectiveChannelCapabilities(channel), secretRefsConfigured: Object.keys(safeJson(secret_refs_json)) }; }
 function safeConfig(value) { const config = safeJson(value); for (const key of Object.keys(config)) if (/token|secret|password|authorization|username|accesskey|credential|headers/i.test(key)) delete config[key]; return config; }
 function safeJson(value) { try { const parsed = JSON.parse(value || '{}'); return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {}; } catch { return {}; } }

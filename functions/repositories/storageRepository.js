@@ -45,6 +45,18 @@ export class StorageRepository {
     await this.db.prepare('UPDATE storage_channels SET enabled=?, health_status=?, updated_at=? WHERE id=?').bind(enabled ? 1 : 0, status, now(), id).run();
     return this.getChannel(id);
   }
+  async updateChannel(id, patch) {
+    const current = await this.getChannel(id);
+    if (!current) return null;
+    const allowed = { failureDomain: 'failure_domain', priority: 'priority' };
+    const entries = Object.entries(patch)
+      .filter(([key, value]) => allowed[key] && value !== undefined)
+      .map(([key, value]) => [allowed[key], value]);
+    if (!entries.length) return current;
+    await this.db.prepare(`UPDATE storage_channels SET ${entries.map(([column]) => `${column}=?`).join(',')}, updated_at=? WHERE id=?`)
+      .bind(...entries.map(([, value]) => value), now(), id).run();
+    return this.getChannel(id);
+  }
 
   async createPolicy(policy) {
     const time = now();
