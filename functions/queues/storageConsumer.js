@@ -4,7 +4,26 @@ import { getAdapter } from '../core/storage/registry.js';
 export async function consumeStorageJobs(batch, env, appFactory = runtime) {
   const app = appFactory(env);
   for (const message of batch.messages) {
-    const job = await app.repository.claimJob(message.body?.jobId);
+    const queuedJob = await app.repository.getJob(message.body?.jobId);
+    if (!queuedJob) {
+      message.ack();
+      continue;
+    }
+    try {
+      // Claiming changes durable state and increments attempts. Check the guard
+      // first so a delayed Queue delivery is free to pause at restricted levels.
+      const queuedFile = await app.repository.getFile(queuedJob.file_id);
+      const queuedReplica = queuedJob.replica_id ? await app.repository.getReplica(queuedJob.replica_id) : null;
+      await assertJobAllowed(app, queuedJob, queuedFile, queuedReplica);
+    } catch (error) {
+      if (error.code === 'ZERO_COST_GUARD') {
+        message.ack();
+        continue;
+      }
+      message.retry();
+      continue;
+    }
+    const job = await app.repository.claimJob(queuedJob.id);
     if (!job) {
       message.ack();
       continue;
@@ -118,7 +137,7 @@ async function assertJobAllowed(app, job, file, replica) {
 }
 
 async function isCriticalRepair(repository, file, replica) {
-  if (!replica || !['primary', 'sync_backup'].includes(replica.role) || !['degraded', 'failed'].includes(file.status)) return false;
+  if (!file || !replica || !['primary', 'sync_backup'].includes(replica.role) || !['degraded', 'failed'].includes(file.status)) return false;
   const replicas = await repository.listReplicas(file.id);
   return replicas.filter(isReadableSource).length === 1;
 }

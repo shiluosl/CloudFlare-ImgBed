@@ -117,3 +117,7 @@ The initial deletion batch advances the logical-file generation, records the tom
 ## ADR-029: D1 enforces the synchronous-copy policy ceiling
 
 The operations API and runtime already limit `required_copies` and `minimum_readable_copies` to one or two, but application validation alone is not sufficient when an operator or recovery procedure writes D1 directly. Migration `0034_zero_cost_dr_policy_copy_bounds.sql` normalizes pre-existing V3 values and installs insert/update triggers that reject values outside one to two or a readable threshold above the required threshold. Async replicas remain unconstrained by this policy field; they are explicitly asynchronous and cannot satisfy the synchronous availability target.
+
+## ADR-030: Queue guard checks precede durable job claims
+
+Queue delivery can arrive long after a job was dispatched, including after the Zero Cost Guard enters `WRITE_LIMITED`, `READ_ONLY`, or `EMERGENCY`. The consumer first performs a read-only durable-job lookup and applies the operation-specific guard before `claimJob()` changes status to `running` or increments attempts. A paused message is acknowledged with its durable job unchanged, leaving bounded cron redispatch to wake it after the protection level permits execution. The consumer repeats the guard after a successful claim to defend against a level change during the claim race. Tombstoned deletion remains executable in `READ_ONLY`, while `EMERGENCY` pauses even deletion.

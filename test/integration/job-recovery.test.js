@@ -94,27 +94,63 @@ describe('D1 job and Queue recovery integration', () => {
     assert.equal(messages[1].acks, 1);
   });
 
-  it('defers recount work when the zero-cost guard limits ordinary writes', async () => {
+  it('acknowledges read-only recount delivery before claim without changing the durable job', async () => {
     const repository = new ConsumerRepository();
-    repository.deferJobForGuard = async (_id, level) => {
-      repository.deferred = level;
-      repository.job.status = 'retry_wait';
-    };
     const app = consumerApp(repository);
     app.guard.assertWrite = async () => {
       const error = new Error('Writes are paused');
       error.code = 'ZERO_COST_GUARD';
-      error.level = 'WRITE_LIMITED';
+      error.level = 'READ_ONLY';
       throw error;
     };
     const message = queueMessage('job_duplicate');
 
     await consumeStorageJobs({ messages: [message] }, {}, () => app);
 
-    assert.equal(repository.deferred, 'WRITE_LIMITED');
-    assert.equal(repository.job.status, 'retry_wait');
+    assert.equal(repository.claims, 0);
+    assert.equal(repository.job.status, 'queued');
+    assert.equal(repository.job.attempts, 0);
     assert.equal(app.storage.recounts, 0);
     assert.equal(message.acks, 1);
+  });
+
+  it('does not claim or call an adapter for emergency-paused deletion delivery', async () => {
+    const repository = new DeletionRecoveryRepository();
+    let adapterCalls = 0;
+    const app = deletionApp(repository, async () => { adapterCalls += 1; }, {
+      async assertDelete() {
+        const error = new Error('Deletion is paused');
+        error.code = 'ZERO_COST_GUARD';
+        error.level = 'EMERGENCY';
+        throw error;
+      },
+    });
+    const message = queueMessage('job_delete_recovery');
+
+    await consumeStorageJobs({ messages: [message] }, {}, () => app);
+
+    assert.equal(repository.claims, 0);
+    assert.equal(repository.job.status, 'queued');
+    assert.equal(repository.job.attempts, 0);
+    assert.equal(adapterCalls, 0);
+    assert.equal(message.acks, 1);
+  });
+
+  it('allows tombstoned deletion to claim and execute in read-only mode', async () => {
+    const repository = new DeletionRecoveryRepository();
+    let deleteCalls = 0;
+    const app = deletionApp(repository, async () => { deleteCalls += 1; return { deleted: true }; }, {
+      async assertDelete() { return 'READ_ONLY'; },
+      async assertWrite() { throw new Error('ordinary writes must not run'); },
+    });
+    const message = queueMessage('job_delete_recovery');
+
+    await consumeStorageJobs({ messages: [message] }, {}, () => app);
+
+    assert.equal(repository.claims, 1);
+    assert.equal(deleteCalls, 1);
+    assert.equal(repository.file.status, 'deleted');
+    assert.equal(repository.job.status, 'succeeded');
   });
 
   it('cancels late create and repair work when a tombstone advances the generation', async () => {
@@ -275,6 +311,7 @@ class ConsumerRepository {
     this.tombstone = tombstone || null;
     this.claims = 0;
   }
+  async getJob(id) { return id === this.job.id ? this.job : null; }
   async claimJob(id) {
     this.claims += 1;
     if (id !== this.job.id || !['pending', 'queued', 'retry_wait'].includes(this.job.status)) return null;
@@ -294,8 +331,10 @@ class DeletionRecoveryRepository {
     this.file = { id: 'file_1', generation: 2, status: 'deleting' };
     this.tombstone = { file_id: 'file_1', generation: 2 };
     this.replica = { id: 'replica_1', channel_id: 'channel_1', object_key: 'file_1/a.txt', remote_id: null, remote_metadata_json: '{}', status: 'deleting' };
+    this.claims = 0;
   }
-  async claimJob(id) { if (id !== this.job.id || !['pending', 'queued', 'retry_wait'].includes(this.job.status)) return null; this.job.status = 'running'; this.job.attempts += 1; return this.job; }
+  async getJob(id) { return id === this.job.id ? this.job : null; }
+  async claimJob(id) { this.claims += 1; if (id !== this.job.id || !['pending', 'queued', 'retry_wait'].includes(this.job.status)) return null; this.job.status = 'running'; this.job.attempts += 1; return this.job; }
   async getFile() { return this.file; }
   async getTombstone() { return this.tombstone; }
   async getReplica() { return this.replica; }
@@ -314,11 +353,11 @@ function consumerApp(repository) {
   };
 }
 
-function deletionApp(repository, remove) {
+function deletionApp(repository, remove, guard = { async assertDelete() {} }) {
   return {
     repository,
     adapterFor: async () => ({ delete: remove }),
-    guard: { async assertDelete() {} },
+    guard,
     health: { async recordFailure() {}, async recordSuccess() {} },
     storage: { async recomputeFileHealth() {} },
   };
