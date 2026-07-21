@@ -2,7 +2,7 @@
 
 ## Current phase
 
-Phase 12 and the final capability-contract and SSRF-boundary audit are complete on `feature/zero-cost-dr-v3`. The final audit closes deployment-binding, legacy-R2 isolation, legacy-KV deployment isolation, rollback-flag, management-surface, transition-audit, durable-Queue, upload-state, fair bounded maintenance-scan, silent-replica-loss recovery, sampled usage, rate-paused synchronous-upload preflight, policy-controls, D1-read estimation, metadata-size estimation, optional S3-compatible adapter support, bounded batch upload, fallback auditing, deletion recovery coverage, effective channel capability enforcement, guarded deletion retries, and scoped V3 paid-resource scan gaps identified in post-implementation review.
+Phase 12 and the final capability-contract, SSRF-boundary, and read-only fallback-side-effect audit are complete on `feature/zero-cost-dr-v3`. The final audit closes deployment-binding, legacy-R2 isolation, legacy-KV deployment isolation, rollback-flag, management-surface, transition-audit, durable-Queue, upload-state, fair bounded maintenance-scan, silent-replica-loss recovery, sampled usage, rate-paused synchronous-upload preflight, policy-controls, D1-read estimation, metadata-size estimation, optional S3-compatible adapter support, bounded batch upload, fallback auditing, deletion recovery coverage, effective channel capability enforcement, guarded deletion retries, and scoped V3 paid-resource scan gaps identified in post-implementation review.
 
 ## Completed
 
@@ -42,6 +42,8 @@ Phase 12 and the final capability-contract and SSRF-boundary audit are complete 
 - Extended the zero-cost scanner with V3 source checks for forbidden R2 runtime access/provider creation and prohibited paid Cloudflare features, with a disposable-source regression test.
 - Added effective channel capability calculation: persisted capabilities can only disable an Adapter operation or lower its object-size ceiling. Policy validation and upload preflight now reject selected channels without read/write/delete support before creating a logical file. Operations UI displays the effective contract rather than untrusted raw channel metadata.
 - Retrying a deletion job now follows the same Zero Cost Guard delete rule as initial deletion. Endpoint validation also rejects CGNAT and IPv4-mapped IPv6 targets to tighten SSRF protection.
+- A `READ_ONLY` or `EMERGENCY` fallback read now remains side-effect-free: it can stream a healthy backup but does not update channel health, mark the primary suspect, create ordinary repair work, or write a fallback audit record. These optional actions resume only when ordinary repair is permitted.
+- `RECOUNT_FILE_HEALTH` and `RECONCILE_FILE` are now treated as ordinary Guarded D1 writes during Queue execution and manual retry; the consumer defers them when write protection is active instead of silently changing file state.
 
 ## Not completed / deliberate limits
 
@@ -66,6 +68,7 @@ Phase 12 and the final capability-contract and SSRF-boundary audit are complete 
   - Final policy and estimate audit on 2026-07-21: `npm.cmd test` - 33 unit tests and 4 integration tests passing; `npm.cmd run lint`, `npm.cmd run check:migrations`, `npm.cmd run check:secrets`, `npm.cmd run build`, and binding-free `npx.cmd wrangler deploy --dry-run --config deploy/worker/wrangler.toml` all passed. The dry run reported only `ASSETS` plus zero-cost environment variables and no D1/Queue bindings because the checked-in TOML remains intentionally identifier-free.
   - Final S3/batch/failover audit on 2026-07-21: `npm.cmd test` - 37 unit tests and 5 integration tests passing; `npm.cmd run lint`, `npm.cmd run check:migrations`, `npm.cmd run check:secrets`, `npm.cmd run build`, and binding-free `npx.cmd wrangler deploy --dry-run --config deploy/worker/wrangler.toml` all passed. The dry run reported only `ASSETS` plus zero-cost environment variables and no D1/Queue bindings because the checked-in TOML remains intentionally identifier-free.
   - Final capability-contract/SSRF audit on 2026-07-21: `npm.cmd test` - 41 unit tests and 5 integration tests passing; `npm.cmd run lint`, `npm.cmd run check:migrations`, `npm.cmd run check:secrets`, `npm.cmd run build`, and binding-free `npx.cmd wrangler deploy --dry-run --config deploy/worker/wrangler.toml` all passed. `git diff --check` and inline JavaScript syntax validation for `frontend-dist/ops.html` also passed. Real WebDAV, Telegram, and S3-compatible end-to-end tests remain intentionally unrun because no external credentials were used.
+  - Final read-only write-protection audit on 2026-07-21: `npm.cmd test` - 43 unit tests and 6 integration tests passing; `npm.cmd run lint`, `npm.cmd run check:migrations`, `npm.cmd run check:secrets`, `npm.cmd run build`, binding-free `npx.cmd wrangler deploy --dry-run --config deploy/worker/wrangler.toml`, and `git diff --check` all passed. The dry run reported only `ASSETS` and zero-cost environment variables.
 
 ## Commits created
 

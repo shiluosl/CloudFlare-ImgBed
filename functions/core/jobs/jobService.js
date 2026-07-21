@@ -28,6 +28,7 @@ export class JobService {
     if (job.operation === 'DELETE_REPLICA') await this.guard.assertDelete({ admin: true });
     if (job.operation === 'VERIFY_REPLICA') await this.guard.assertVerify();
     if (['CREATE_REPLICA', 'REPAIR_REPLICA'].includes(job.operation)) await this.guard.assertRepair({ critical: essential });
+    if (['RECOUNT_FILE_HEALTH', 'RECONCILE_FILE'].includes(job.operation)) await this.guard.assertWrite();
     const pending = await this.repository.updateJob(jobId, 'pending', { runAfter: Date.now() });
     if (this.queue) await this.enqueue(pending, { essential });
     return this.repository.getJob(jobId);

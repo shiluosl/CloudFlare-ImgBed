@@ -45,6 +45,29 @@ describe('D1 job and Queue recovery integration', () => {
     assert.equal(messages[1].acks, 1);
   });
 
+  it('defers recount work when the zero-cost guard limits ordinary writes', async () => {
+    const repository = new ConsumerRepository();
+    repository.deferJobForGuard = async (_id, level) => {
+      repository.deferred = level;
+      repository.job.status = 'retry_wait';
+    };
+    const app = consumerApp(repository);
+    app.guard.assertWrite = async () => {
+      const error = new Error('Writes are paused');
+      error.code = 'ZERO_COST_GUARD';
+      error.level = 'WRITE_LIMITED';
+      throw error;
+    };
+    const message = queueMessage('job_duplicate');
+
+    await consumeStorageJobs({ messages: [message] }, {}, () => app);
+
+    assert.equal(repository.deferred, 'WRITE_LIMITED');
+    assert.equal(repository.job.status, 'retry_wait');
+    assert.equal(app.storage.recounts, 0);
+    assert.equal(message.acks, 1);
+  });
+
   it('cancels late create and repair work when a tombstone advances the generation', async () => {
     const repository = new ConsumerRepository({
       job: { ...jobInput('job_late_repair'), operation: 'REPAIR_REPLICA', replica_id: 'replica_1', generation: 1 },
@@ -193,7 +216,7 @@ class DeletionRecoveryRepository {
 function consumerApp(repository) {
   return {
     repository,
-    guard: { async assertRepair() {}, async assertAsyncReplica() {}, async assertVerify() {}, async assertDelete() {} },
+    guard: { async assertRepair() {}, async assertAsyncReplica() {}, async assertVerify() {}, async assertDelete() {}, async assertWrite() {} },
     health: { async recordFailure() {}, async recordSuccess() {} },
     storage: { recounts: 0, async recomputeFileHealth() { this.recounts += 1; } },
   };

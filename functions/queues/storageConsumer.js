@@ -114,6 +114,7 @@ async function assertJobAllowed(app, job, file, replica) {
     ? guard.assertAsyncReplica()
     : guard.assertRepair({ critical: criticalRepair });
   if (job.operation === 'REPAIR_REPLICA') return guard.assertRepair({ critical: criticalRepair });
+  if (['RECOUNT_FILE_HEALTH', 'RECONCILE_FILE'].includes(job.operation)) return guard.assertWrite();
 }
 
 async function isCriticalRepair(repository, file, replica) {

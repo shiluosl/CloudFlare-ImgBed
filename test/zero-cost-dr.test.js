@@ -272,6 +272,25 @@ describe('read, delete, and queue recovery', () => {
     assert.equal((await service.read('file_1', new Request('https://example.test/file/file_1'))).response.status, 503);
   });
 
+  it('keeps a fallback read side-effect-free when the Zero-Cost Guard is read-only', async () => {
+    const repository = new FileMemoryRepository();
+    const jobs = { records: [], async create(job) { this.records.push(job); } };
+    const health = { successes: 0, failures: 0, async recordSuccess() { this.successes += 1; }, async recordFailure() { this.failures += 1; } };
+    const guard = { async assertRepair() { const error = new Error('Replica repair is paused'); error.code = 'ZERO_COST_GUARD'; error.level = 'READ_ONLY'; throw error; } };
+    const storage = {
+      async readCandidates() { return repository.replicas; },
+      async openReplica(replica) { if (replica.id === 'primary') throw Object.assign(new Error('primary unavailable'), { code: 'NETWORK_ERROR' }); return new Response('backup'); },
+    };
+    const result = await new FileService({ repository, jobs, storage, health, guard }).read('file_1', new Request('https://example.test/file/file_1'));
+    assert.equal(result.response.status, 200);
+    assert.equal(await result.response.text(), 'backup');
+    assert.equal(repository.replicas[0].status, 'healthy');
+    assert.equal(jobs.records.length, 0);
+    assert.equal(repository.audits.length, 0);
+    assert.equal(health.successes, 0);
+    assert.equal(health.failures, 0);
+  });
+
   it('creates a next-generation tombstone and prevents late non-delete jobs', async () => {
     const repository = new FileMemoryRepository();
     const jobs = { records: [], async create(job) { this.records.push(job); } };
@@ -347,6 +366,19 @@ describe('read, delete, and queue recovery', () => {
       async assertDelete() { const error = new Error('Deletion is paused'); error.code = 'ZERO_COST_GUARD'; error.level = 'EMERGENCY'; throw error; },
     };
     await assert.rejects(() => new JobService(repository, guard).retry('job_1'), error => error.code === 'ZERO_COST_GUARD' && error.level === 'EMERGENCY');
+  });
+
+  it('does not retry file health recount work while writes are limited', async () => {
+    const repository = {
+      updates: 0,
+      async getJob() { return { id: 'job_1', status: 'dead', operation: 'RECOUNT_FILE_HEALTH', file_id: 'file_1', replica_id: null }; },
+      async updateJob() { this.updates += 1; },
+    };
+    const guard = {
+      async assertWrite() { const error = new Error('Writes are paused'); error.code = 'ZERO_COST_GUARD'; error.level = 'WRITE_LIMITED'; throw error; },
+    };
+    await assert.rejects(() => new JobService(repository, guard).retry('job_1'), error => error.code === 'ZERO_COST_GUARD' && error.level === 'WRITE_LIMITED');
+    assert.equal(repository.updates, 0);
   });
 });
 

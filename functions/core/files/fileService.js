@@ -6,10 +6,24 @@ export class FileService {
     const { repository, storage, jobs, health, guard } = this.runtime; const file = await repository.getFile(fileId);
     if (!file || ['deleted', 'deleting', 'delete_degraded'].includes(file.status) || await repository.getTombstone(fileId)) return { response: new Response('Not Found', { status: 404 }) };
     const candidates = await storage.readCandidates(fileId); if (!candidates.length) return { response: new Response('File temporarily unavailable', { status: 503 }) };
+    let readSideEffectsAllowed = null;
+    const mayWriteReadState = async () => {
+      if (readSideEffectsAllowed !== null) return readSideEffectsAllowed;
+      try {
+        // A read remains available at every protection level. Its optional
+        // health, repair, and audit writes are ordinary repair work instead.
+        await guard?.assertRepair({ critical: false });
+        readSideEffectsAllowed = true;
+      } catch (error) {
+        if (error.code !== 'ZERO_COST_GUARD') throw error;
+        readSideEffectsAllowed = false;
+      }
+      return readSideEffectsAllowed;
+    };
     let previousError = null;
-    for (let index = 0; index < candidates.length; index += 1) { const replica = candidates[index]; try { const remote = await storage.openReplica(replica, request.headers.get('Range')); await health?.recordSuccess(replica); if (index > 0) { await repository.updateReplica(candidates[0].id, { status: 'suspect', last_error_code: previousError?.code || 'READ_FAILED', last_error_message: safeMessage(previousError) }); try { await guard?.assertRepair({ critical: false }); await jobs.create({ id: `job_${crypto.randomUUID()}`, fileId, replicaId: candidates[0].id, channelId: candidates[0].channel_id, operation: 'REPAIR_REPLICA', generation: file.generation, idempotencyKey: `read-repair:${fileId}:${candidates[0].id}:${file.generation}` }); } catch (error) { if (error.code !== 'ZERO_COST_GUARD') throw error; } await auditReadFallback(repository, fileId, candidates[0].id, replica.id, previousError?.code); }
+    for (let index = 0; index < candidates.length; index += 1) { const replica = candidates[index]; try { const remote = await storage.openReplica(replica, request.headers.get('Range')); const sideEffects = await mayWriteReadState(); if (sideEffects) await health?.recordSuccess(replica); if (index > 0 && sideEffects) { await repository.updateReplica(candidates[0].id, { status: 'suspect', last_error_code: previousError?.code || 'READ_FAILED', last_error_message: safeMessage(previousError) }); await jobs.create({ id: `job_${crypto.randomUUID()}`, fileId, replicaId: candidates[0].id, channelId: candidates[0].channel_id, operation: 'REPAIR_REPLICA', generation: file.generation, idempotencyKey: `read-repair:${fileId}:${candidates[0].id}:${file.generation}` }); await auditReadFallback(repository, fileId, candidates[0].id, replica.id, previousError?.code); }
         const headers = new Headers(remote.headers); headers.set('Content-Disposition', disposition(file.name, file.content_type)); headers.set('X-Content-Type-Options', 'nosniff'); headers.set('Referrer-Policy', 'no-referrer'); headers.set('Cache-Control', file.is_public ? 'public, max-age=3600, s-maxage=3600' : 'private, no-store'); return { response: new Response(request.method === 'HEAD' ? null : remote.body, { status: remote.status, headers }) };
-      } catch (error) { previousError = error; await health?.recordFailure(replica, error); }
+      } catch (error) { previousError = error; if (await mayWriteReadState()) await health?.recordFailure(replica, error); }
     }
     return { response: new Response('File temporarily unavailable', { status: 503 }) };
   }
