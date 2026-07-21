@@ -101,3 +101,7 @@ Historical upstream R2 implementation remains in the repository for non-V3 compa
 ## ADR-025: Deletion initialization is an atomic D1 batch and Queue is only a wake-up
 
 The initial deletion batch advances the logical-file generation, records the tombstone, marks every remaining replica `deleting`, inserts idempotent `DELETE_REPLICA` durable jobs, and records the delete-request audit event together. A Queue send occurs only after that batch and is intentionally best-effort: cron redispatch can awaken the D1-backed work if it fails. Tombstone insertion is conflict-safe, so concurrent delete requests converge on the first tombstone rather than replacing history or failing after partial cleanup. This guarantees that a Worker interruption or Queue outage cannot leave a newly tombstoned file without durable deletion work.
+
+## ADR-026: V3 logical-file reads bypass shared Cache API
+
+`/file/{fileId}` responses are always `private, no-store`, and the generated Worker bypasses both Cache API lookup and storage for that route. Cache API entries are scoped to an edge location and cannot provide a globally synchronous invalidation guarantee when a D1 tombstone is committed. Routing every V3 logical-file read through `FileService` ensures the tombstone check takes effect immediately, which is more important than public-read cache savings for deletion correctness. Cache API remains an allowed temporary optimization for non-V3 routes and is never a persistent replica.

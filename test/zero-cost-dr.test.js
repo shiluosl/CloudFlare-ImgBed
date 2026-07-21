@@ -76,6 +76,11 @@ describe('zero-cost DR core', () => {
     );
     assert.equal(legacyFallback, null);
   });
+  it('keeps V3 logical-file reads out of the shared Worker Cache path', () => {
+    const template = readFileSync('deploy/worker/generate-routes.js', 'utf8');
+    assert.match(template, /function isV3LogicalFilePath\(pathname\)/);
+    assert.match(template, /if \(isV3LogicalFilePath\(new URL\(request\.url\)\.pathname\)\)/);
+  });
   it('hides and rejects historical R2 upload paths in zero-cost mode', () => {
     const uploadConfig = {
       telegram: { channels: [{ name: 'telegram' }] },
@@ -318,6 +323,7 @@ describe('read, delete, and queue recovery', () => {
     const service = new FileService({ repository, jobs, storage });
     const result = await service.read('file_1', new Request('https://example.test/file/file_1'));
     assert.equal(result.response.status, 200);
+    assert.equal(result.response.headers.get('Cache-Control'), 'private, no-store');
     assert.equal(await result.response.text(), 'backup');
     assert.equal(repository.replicas[0].status, 'suspect');
     assert.equal(jobs.records[0].operation, 'REPAIR_REPLICA');

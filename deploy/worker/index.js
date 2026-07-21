@@ -269,6 +269,10 @@ function isV3MeteredPath(pathname) {
     return pathname.startsWith('/file/') || pathname.startsWith('/api/manage/ops/');
 }
 
+function isV3LogicalFilePath(pathname) {
+    return pathname.startsWith('/file/');
+}
+
 // 只写入完整 GET 响应，Range 请求仅尝试命中已有完整缓存
 function isCacheStoreRequest(request) {
     return request.method === 'GET' && !request.headers.has('Range');
@@ -298,6 +302,13 @@ function responseFromHeadCache(cachedResponse) {
 }
 
 async function maybeServeFromCache(request, ctx, producer) {
+    // A V3 logical-file read must enter FileService so a newly committed
+    // tombstone takes effect immediately instead of being bypassed by a
+    // per-PoP Cache API entry.
+    if (isV3LogicalFilePath(new URL(request.url).pathname)) {
+        return await producer();
+    }
+
     if (!isCacheLookupRequest(request)) {
         return await producer();
     }
