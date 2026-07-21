@@ -99,10 +99,7 @@ export function createS3Client(channel, env = {}) {
   const config = channel.config || {};
   let endpoint;
   try {
-    endpoint = assertExternalEndpoint(config.endpoint, {
-      allowPrivate: config.allowPrivateEndpoint === true,
-      label: 'S3 endpoint',
-    }).toString();
+    endpoint = assertExternalEndpoint(config.endpoint, { label: 'S3 endpoint' }).toString();
   } catch (error) {
     throw configurationError(channel.id, error.message);
   }

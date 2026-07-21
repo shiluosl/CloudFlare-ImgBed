@@ -60,7 +60,7 @@ Create the channel through the authenticated operations API or `/ops.html` with 
 }
 ```
 
-The endpoint must be HTTPS, must not embed credentials, and is checked against private-network destinations by default. S3 is intended for an asynchronous or explicitly selected backup policy; the stable default remains WebDAV primary plus Telegram synchronous backup.
+The endpoint must be HTTPS, must not embed credentials, and must be publicly reachable. Private, loopback, link-local, CGNAT, and local IPv6 destinations are always rejected; `allowPrivateEndpoint` is not supported. S3 is intended for an asynchronous or explicitly selected backup policy; the stable default remains WebDAV primary plus Telegram synchronous backup.
 
 ## Apply migrations
 
@@ -118,6 +118,6 @@ The operations panel's database-size field is an intentionally conservative appl
 
 - `check:zero-cost` fails: remove prohibited bindings or runtime references, including R2, Workers AI, Vectorize, Browser Rendering, and Containers. The V3 registry intentionally rejects `provider=r2`.
 - A channel test reports authentication failure: rotate the provider credential, update the corresponding Worker secret, and keep only the secret reference name in D1.
-- A channel test reports an invalid endpoint: use a public HTTPS endpoint without URL credentials; do not point WebDAV or S3 configuration at private or link-local addresses.
+- A channel test reports an invalid endpoint: use a public HTTPS endpoint without URL credentials; do not point WebDAV or S3 configuration at private or link-local addresses. There is no private-endpoint override, including for self-hosted S3-compatible services.
 - The dry run shows no D1/Queue bindings: this is expected for the checked-in identifier-free TOML. Use `npm.cmd run deploy:worker` with operator-provided identifiers to generate and validate a deployment-capable configuration.
 - Uploads are refused by the protection guard: inspect `/ops.html`, reduce usage, wait for the next accounting window, and do not resolve the issue by enabling a paid Cloudflare product.

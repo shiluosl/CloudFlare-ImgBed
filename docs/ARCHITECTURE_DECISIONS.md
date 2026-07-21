@@ -85,3 +85,7 @@ Each provider has a code-owned capability ceiling. A channel may disable an oper
 ## ADR-021: Cron redispatch honors the Zero Cost Guard before lease recovery
 
 Recovering an expired Queue-worker lease is a D1 write and can immediately lead to a Queue operation, so it is not an unconditional housekeeping action. Scheduled maintenance obtains the current protection level before calling the durable-job service. At `READ_ONLY`, only `DELETE_REPLICA` work may be recovered and redispatched because tombstoned deletion is an explicitly allowed safety operation. At `WRITE_LIMITED`, deletion plus a degraded/failed required primary or synchronous-backup repair with exactly one readable replica may proceed. At `EMERGENCY`, no leases are recovered and no jobs are dispatched. The repository first selects expired jobs, then updates only approved IDs; ordinary paused leases remain `running` until the protection level permits recovery or an operator intervenes.
+
+## ADR-022: Storage endpoints never allow private-network exceptions
+
+WebDAV, S3-compatible, and optional Telegram proxy URLs must resolve from a public `https` endpoint without embedded credentials. V3 rejects localhost, loopback, RFC1918, link-local, CGNAT, IPv4-mapped IPv6, and local IPv6 destinations. The former `allowPrivateEndpoint` setting is rejected by the management API and ignored by adapters, so an old D1 record cannot turn a Worker into an internal-network request proxy. Redirects remain disabled or rejected by adapters, preventing a public endpoint from redirecting to a private target.

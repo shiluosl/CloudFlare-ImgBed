@@ -15,7 +15,7 @@ export class WebDavAdapter extends StorageAdapter {
     for (const [key, value] of Object.entries(extra)) if (value !== undefined && value !== null) headers.set(key, value);
     return headers;
   }
-  objectUrl(key) { try { const config = this.config(); assertExternalEndpoint(config.baseUrl, { allowPrivate: config.allowPrivateEndpoint === true, label: 'WebDAV baseUrl' }); return buildWebDAVUrl(normalizeBaseUrl(config.baseUrl), key); } catch (error) { throw new StorageError({ provider: this.provider(), channelId: this.channel.id, code: STORAGE_ERROR_CODES.INVALID_CONFIGURATION, message: error.message }); } }
+  objectUrl(key) { try { const config = this.config(); assertExternalEndpoint(config.baseUrl, { label: 'WebDAV baseUrl' }); return buildWebDAVUrl(normalizeBaseUrl(config.baseUrl), key); } catch (error) { throw new StorageError({ provider: this.provider(), channelId: this.channel.id, code: STORAGE_ERROR_CODES.INVALID_CONFIGURATION, message: error.message }); } }
   async request(key, init, operation) {
     const response = await withTimeout(this.fetch, this.objectUrl(key), { ...init, headers: this.headers(init.headers), redirect: 'manual' }, Number(this.config().timeoutMs) || 10000, { provider: this.provider(), channelId: this.channel.id });
     if (response.status >= 300 && response.status < 400) throw new StorageError({ provider: this.provider(), channelId: this.channel.id, code: STORAGE_ERROR_CODES.INVALID_CONFIGURATION, message: 'WebDAV redirects are not allowed' });

@@ -108,6 +108,14 @@ describe('S3-compatible adapter contract', () => {
     assert.equal(validSecretRefs('s3', { accessKeyIdRef: 'S3_ACCESS_KEY_ID' }), false);
     assert.doesNotThrow(() => validateChannelConfig('s3', channel.config));
   });
+
+  it('rejects private S3 and WebDAV endpoints even when legacy bypass config is present', () => {
+    const s3Channel = { id: 's3-private', config: { endpoint: 'http://127.0.0.1:9000', bucketName: 'imgbed-backups', allowPrivateEndpoint: true }, secretRefs: { accessKeyIdRef: 'S3_ACCESS_KEY_ID', secretAccessKeyRef: 'S3_SECRET_ACCESS_KEY' } };
+    assert.throws(() => validateChannelConfig('s3', s3Channel.config), /allowPrivateEndpoint/);
+    assert.throws(() => new S3Adapter(s3Channel, { S3_ACCESS_KEY_ID: 'id', S3_SECRET_ACCESS_KEY: 'secret' }).clientForChannel(), error => error.code === STORAGE_ERROR_CODES.INVALID_CONFIGURATION);
+    assert.throws(() => validateChannelConfig('webdav', { baseUrl: 'http://127.0.0.1/dav', allowPrivateEndpoint: true }), /allowPrivateEndpoint/);
+    assert.throws(() => new WebDavAdapter({ id: 'webdav-private', config: { baseUrl: 'http://127.0.0.1/dav', allowPrivateEndpoint: true } }, {}).objectUrl('file.txt'), error => error.code === STORAGE_ERROR_CODES.INVALID_CONFIGURATION);
+  });
 });
 
 describe('upload disaster recovery workflow', () => {
@@ -455,8 +463,10 @@ describe('zero-cost controls and security', () => {
     const guard = new ZeroCostGuard(repository, { DAILY_UPLOAD_SOFT_LIMIT: '500' });
     await assert.rejects(() => guard.assertWrite({ admin: true }), error => error.level === 'READ_ONLY');
   });
-  it('rejects private WebDAV endpoints unless explicitly allowed', () => {
+  it('rejects private endpoints without an override', () => {
+    assert.throws(() => assertExternalEndpoint('http://storage.example/dav'));
     assert.throws(() => assertExternalEndpoint('http://127.0.0.1/dav'));
+    assert.throws(() => assertExternalEndpoint('http://127.0.0.1/dav', { allowPrivate: true }));
     assert.throws(() => assertExternalEndpoint('http://100.64.0.1/dav'));
     assert.throws(() => assertExternalEndpoint('http://[::ffff:127.0.0.1]/dav'));
     assert.equal(assertExternalEndpoint('https://storage.example/dav').hostname, 'storage.example');

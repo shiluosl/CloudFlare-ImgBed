@@ -12,10 +12,11 @@ function safeConfig(value) { const config = JSON.parse(value || '{}'); for (cons
 export function hasSensitiveConfig(config) { return Object.entries(config || {}).some(([key, value]) => /token|secret|password|authorization|username|accesskey|credential/i.test(key) || (key === 'headers' && Object.keys(value || {}).some(header => /authorization|cookie/i.test(header)))); }
 export function validSecretRefs(provider, refs) { if (!refs || typeof refs !== 'object') return false; const values = Object.values(refs); if (!values.every(value => typeof value === 'string' && /^[A-Z][A-Z0-9_]{1,127}$/.test(value))) return false; if (provider === 'webdav') return Boolean(refs.usernameRef && refs.passwordRef); if (provider === 'telegram') return Boolean(refs.tokenRef); if (provider === 's3') return Boolean(refs.accessKeyIdRef && refs.secretAccessKeyRef); return true; }
 export function validateChannelConfig(provider, config) {
+  if (config.allowPrivateEndpoint !== undefined) throw new Error('allowPrivateEndpoint is not supported; storage endpoints must be public');
   if (provider === 'webdav') assertExternalEndpoint(config.baseUrl, { label: 'WebDAV baseUrl' });
   if (provider === 'telegram' && config.proxyUrl) assertExternalEndpoint(config.proxyUrl, { label: 'Telegram proxyUrl' });
   if (provider === 's3') {
-    assertExternalEndpoint(config.endpoint, { allowPrivate: config.allowPrivateEndpoint === true, label: 'S3 endpoint' });
+    assertExternalEndpoint(config.endpoint, { label: 'S3 endpoint' });
     if (!/^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$/i.test(String(config.bucketName || ''))) throw new Error('S3 bucketName is required and must be a valid bucket name');
     if (config.region !== undefined && (typeof config.region !== 'string' || config.region.length > 64)) throw new Error('S3 region must be a short string');
     if (config.pathStyle !== undefined && typeof config.pathStyle !== 'boolean') throw new Error('S3 pathStyle must be a boolean');
