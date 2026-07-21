@@ -47,7 +47,7 @@ export class UploadService {
     const synchronousReplicaSpecs = replicas.filter(replica => replica.role !== 'async_backup');
     const mode = input.mode || policy.write_mode || 'safe';
     const synchronousReplicas = mode === 'fast' ? synchronousReplicaSpecs.slice(0, 1) : synchronousReplicaSpecs;
-    const bodies = splitBody(input.body, synchronousReplicas.length); const results = await Promise.all(synchronousReplicas.map((replica, index) => this.orchestrator.writeReplica(file, replica, channels[index], { body: bodies[index], size: input.size, contentType: input.contentType, name: input.name, idempotencyKey: input.idempotencyKey })));
+    const bodies = splitBody(input.body, synchronousReplicas.length); const results = await Promise.all(synchronousReplicas.map((replica, index) => this.orchestrator.writeReplica(file, replica, channelsById.get(replica.channel_id), { body: bodies[index], size: input.size, contentType: input.contentType, name: input.name, idempotencyKey: input.idempotencyKey })));
     const updated = await this.orchestrator.recomputeFileHealth(file.id);
     if (mode === 'fast' && synchronousReplicaSpecs[1] && level === 'NORMAL') await this.createRepair(updated, synchronousReplicaSpecs[1]);
     if (updated.status !== 'available') for (const result of results.filter(result => result.error)) await this.createRepair(updated, result.replica);

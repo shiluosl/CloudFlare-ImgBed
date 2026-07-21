@@ -255,6 +255,69 @@ export class StorageRepository {
     ]);
     return first(this.db.prepare('SELECT * FROM file_tombstones WHERE file_id=?').bind(fileId));
   }
+  async beginDeletion({ fileId, expectedGeneration, actorId, reason, jobs = [] }) {
+    const file = await this.getFile(fileId);
+    if (!file || file.status === 'deleted') return null;
+    const existing = await this.getTombstone(fileId);
+    if (existing) return this.ensureTombstoneDeletion(file, existing, jobs);
+    if (file.generation !== expectedGeneration || file.status === 'deleting') return this.getTombstone(fileId);
+
+    await this.assertTransition('file', file, 'deleting', assertFileTransition);
+    const replicas = await this.listReplicas(fileId);
+    for (const replica of replicas.filter(item => item.status !== 'deleted')) {
+      await this.assertTransition('replica', replica, 'deleting', assertReplicaTransition);
+    }
+
+    const time = now();
+    const generation = expectedGeneration + 1;
+    const statements = [
+      this.db.prepare(`UPDATE files_v3 SET status='deleting', generation=?, updated_at=?
+        WHERE id=? AND generation=? AND status NOT IN ('deleted','deleting')`).bind(generation, time, fileId, expectedGeneration),
+      this.db.prepare(`INSERT OR IGNORE INTO file_tombstones(file_id,generation,reason,created_by,created_at)
+        VALUES(?,?,?,?,?)`).bind(fileId, generation, reason || null, actorId || null, time),
+    ];
+    for (const replica of replicas.filter(item => item.status !== 'deleted')) {
+      statements.push(this.db.prepare("UPDATE file_replicas SET status='deleting', updated_at=? WHERE id=? AND file_id=? AND status<>'deleted'").bind(time, replica.id, fileId));
+    }
+    for (const job of jobs) statements.push(this.jobInsertStatement(job, time));
+    statements.push(this.auditStatement({
+      id: `audit_${crypto.randomUUID()}`,
+      actorId,
+      action: 'file.deleteRequested',
+      targetType: 'file',
+      targetId: fileId,
+      details: { generation, replicaCount: replicas.length },
+    }, time));
+    await this.db.batch(statements);
+    return this.getTombstone(fileId);
+  }
+  async ensureTombstoneDeletion(file, tombstone, jobs = []) {
+    if (!file || file.generation !== tombstone.generation || !['deleting', 'delete_degraded'].includes(file.status)) return tombstone;
+    const replicas = await this.listReplicas(file.id);
+    for (const replica of replicas.filter(item => item.status !== 'deleted' && item.status !== 'deleting')) {
+      await this.assertTransition('replica', replica, 'deleting', assertReplicaTransition);
+    }
+    const time = now();
+    const statements = [];
+    if (file.status === 'delete_degraded') statements.push(this.db.prepare("UPDATE files_v3 SET status='deleting', updated_at=? WHERE id=? AND generation=?").bind(time, file.id, tombstone.generation));
+    for (const replica of replicas.filter(item => item.status !== 'deleted' && item.status !== 'deleting')) {
+      statements.push(this.db.prepare("UPDATE file_replicas SET status='deleting', updated_at=? WHERE id=? AND file_id=?").bind(time, replica.id, file.id));
+    }
+    for (const job of jobs) statements.push(this.jobInsertStatement(job, time));
+    if (statements.length) await this.db.batch(statements);
+    return this.getTombstone(file.id);
+  }
+  jobInsertStatement(job, time = now()) {
+    return this.db.prepare(`INSERT OR IGNORE INTO storage_jobs
+      (id,file_id,replica_id,channel_id,operation,generation,status,attempts,max_attempts,run_after,idempotency_key,payload_json,created_at,updated_at)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).bind(job.id, job.fileId, job.replicaId || null, job.channelId || null,
+      job.operation, job.generation, job.status || 'pending', 0, job.maxAttempts || 5, job.runAfter || time,
+      job.idempotencyKey, JSON.stringify(job.payload || {}), time, time);
+  }
+  auditStatement(entry, time = now()) {
+    return this.db.prepare('INSERT INTO audit_logs(id,actor_id,action,target_type,target_id,request_id,details_json,created_at) VALUES(?,?,?,?,?,?,?,?)')
+      .bind(entry.id, entry.actorId || null, entry.action, entry.targetType, entry.targetId || null, entry.requestId || null, JSON.stringify(safeAuditDetails(entry.details || {})), time);
+  }
   async getTombstone(fileId) { return first(this.db.prepare('SELECT * FROM file_tombstones WHERE file_id=?').bind(fileId)); }
   async incrementUsage(day, changes) {
     const time = now(); const cols = Object.keys(changes); if (!cols.length) return this.getUsage(day);
@@ -264,7 +327,7 @@ export class StorageRepository {
   }
   async getUsage(day) { return first(this.db.prepare('SELECT * FROM usage_counters WHERE day=?').bind(day)); }
   async setProtectionLevel(day, level) { await this.db.prepare('UPDATE usage_counters SET protection_level=?, updated_at=? WHERE day=?').bind(level, now(), day).run(); }
-  async audit(entry) { await this.db.prepare('INSERT INTO audit_logs(id,actor_id,action,target_type,target_id,request_id,details_json,created_at) VALUES(?,?,?,?,?,?,?,?)').bind(entry.id, entry.actorId || null, entry.action, entry.targetType, entry.targetId || null, entry.requestId || null, JSON.stringify(safeAuditDetails(entry.details || {})), now()).run(); }
+  async audit(entry) { await this.auditStatement(entry).run(); }
   async assertTransition(entity, current, next, assertion) {
     try {
       assertion(current.status, next);

@@ -52,9 +52,9 @@ Upstream legacy code still contains historical R2 behavior for compatibility. In
 
 `available` means the primary and synchronous backup are healthy. Healthy asynchronous replicas remain useful for repair and read recovery, but they cannot hide a failed required backup. Upload preflight also rejects a policy whose required channel is already disabled, offline, or quota-blocked before creating the logical file record. V3 uploads enforce a bounded MIME-to-extension policy; environment variables can narrow the default set, while new MIME families require an explicit code review and mapping.
 
-## ADR-014: The V3 Worker deployment uses no KV namespace binding
+## ADR-014: The V3 Worker deployment and local start path use no KV namespace binding
 
-The strict zero-cost V3 resource allowlist is limited to Workers, D1, Queues, static assets, Cache API, and optional Turnstile. The deployment generator rejects `KV_NAMESPACE_ID`, generated deployment TOML cannot contain `[[kv_namespaces]]`, and CI validates that boundary. Historical upstream Pages/Docker compatibility code may still mention KV, but it is not a V3 Worker deployment dependency.
+The strict zero-cost V3 resource allowlist is limited to Workers, D1, Queues, static assets, Cache API, and optional Turnstile. The deployment generator rejects `KV_NAMESPACE_ID`, generated deployment TOML cannot contain `[[kv_namespaces]]`, and CI validates that boundary. `npm start` builds the generated Worker then starts it with an ignored local D1/Queue simulation TOML; it has no KV or R2 binding. Historical upstream Pages/Docker compatibility code may still mention KV, but it is not a V3 Worker deployment or local-development dependency.
 
 ## ADR-015: Maintenance uses a D1 rotation cursor
 
@@ -97,3 +97,7 @@ The `/file/{fileId}` route first checks the additive V3 logical-file record. Onc
 ## ADR-024: Zero-Cost mode also isolates historical R2 request surfaces
 
 Historical upstream R2 implementation remains in the repository for non-V3 compatibility, but `ZERO_COST_MODE=true` omits `cfr2` from the legacy channel-list API and rejects R2 at the legacy upload route, R2 upload function, chunked-upload initialization, and chunked-upload continuation/merge after reading a persisted session. Automatic legacy retry also removes R2 from its candidate list. This closes the gap where a session created before a configuration change could otherwise reach R2 without repeating `uploadChannel=cfr2` in the URL.
+
+## ADR-025: Deletion initialization is an atomic D1 batch and Queue is only a wake-up
+
+The initial deletion batch advances the logical-file generation, records the tombstone, marks every remaining replica `deleting`, inserts idempotent `DELETE_REPLICA` durable jobs, and records the delete-request audit event together. A Queue send occurs only after that batch and is intentionally best-effort: cron redispatch can awaken the D1-backed work if it fails. Tombstone insertion is conflict-safe, so concurrent delete requests converge on the first tombstone rather than replacing history or failing after partial cleanup. This guarantees that a Worker interruption or Queue outage cannot leave a newly tombstoned file without durable deletion work.

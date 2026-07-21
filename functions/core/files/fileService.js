@@ -1,5 +1,3 @@
-import { assertFileTransition, assertReplicaTransition } from '../state/statusMachine.js';
-
 export class FileService {
   constructor(runtime) { this.runtime = runtime; }
   async read(fileId, request) {
@@ -29,14 +27,33 @@ export class FileService {
   }
   async delete(fileId, actorId) {
     const { repository, jobs, guard } = this.runtime; await guard?.assertDelete({ admin: true }); const file = await repository.getFile(fileId); if (!file || file.status === 'deleted') return null;
-    const existing = await repository.getTombstone(fileId); if (existing) return existing;
+    const replicas = await repository.listReplicas(fileId);
+    const existing = await repository.getTombstone(fileId);
+    const generation = existing?.generation || file.generation + 1;
+    const deletionJobs = replicas.filter(replica => replica.status !== 'deleted').map(replica => ({
+      id: `job_${crypto.randomUUID()}`,
+      fileId,
+      replicaId: replica.id,
+      channelId: replica.channel_id,
+      operation: 'DELETE_REPLICA',
+      generation,
+      idempotencyKey: `delete:${fileId}:${replica.id}:${generation}`,
+    }));
+    if (repository.beginDeletion) {
+      const tombstone = await repository.beginDeletion({ fileId, expectedGeneration: file.generation, actorId, reason: 'user_delete', jobs: deletionJobs });
+      // The batch is the durable source of truth. Queue delivery is only an
+      // eager wake-up and cron can redispatch any send that does not happen.
+      for (const job of deletionJobs) await jobs.create(job, { essential: true });
+      return tombstone;
+    }
+    if (existing) return existing;
     const expectedGeneration = file.generation;
     const tombstone = await repository.createTombstone(fileId, expectedGeneration, actorId, 'user_delete');
-    if (!tombstone || tombstone.generation !== expectedGeneration + 1) return await repository.getTombstone(fileId);
-    const updated = await repository.getFile(fileId);
-    if (!updated || updated.status !== 'deleting' || updated.generation !== tombstone.generation) return null;
-    const replicas = await repository.listReplicas(fileId);
-    for (const replica of replicas.filter(replica => replica.status !== 'deleted')) { await repository.updateReplica(replica.id, { status: 'deleting' }); await jobs.create({ id: `job_${crypto.randomUUID()}`, fileId, replicaId: replica.id, channelId: replica.channel_id, operation: 'DELETE_REPLICA', generation: tombstone.generation, idempotencyKey: `delete:${fileId}:${replica.id}:${tombstone.generation}` }, { essential: true }); }
+    if (!tombstone || tombstone.generation !== expectedGeneration + 1) return repository.getTombstone(fileId);
+    for (const replica of replicas.filter(replica => replica.status !== 'deleted')) {
+      await repository.updateReplica(replica.id, { status: 'deleting' });
+      await jobs.create(deletionJobs.find(job => job.replicaId === replica.id), { essential: true });
+    }
     return tombstone;
   }
 }

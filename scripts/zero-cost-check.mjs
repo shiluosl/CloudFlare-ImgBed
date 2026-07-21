@@ -18,6 +18,7 @@ const required = [
   ['deploy/worker/wrangler.toml', /\[\[kv_namespaces\]\]/i, 'V3 Worker configuration declares a forbidden KV binding'],
   ['deploy/worker/generate-toml.js', /\[\[kv_namespaces\]\]/i, 'Deployment generator can create a forbidden KV binding'],
   ['.github/workflows/deploy-worker.yml', /KV_NAMESPACE_ID/i, 'Deployment workflow passes a forbidden KV setting'],
+  ['package.json', /"start"\s*:\s*"[^"]*--kv\b/i, 'Local start script declares a forbidden KV binding'],
 ];
 const forbiddenBinding = [
   /\[\[r2_buckets\]\]/i,

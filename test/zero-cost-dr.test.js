@@ -114,6 +114,14 @@ describe('Telegram adapter contract', () => {
     const fetch = async (url, init = {}) => { if (url.includes('sendDocument')) return Response.json({ ok: true, result: { message_id: 4, document: { file_id: 'remote', file_unique_id: 'unique', file_size: 3 } } }); if (url.includes('getFile')) return Response.json({ ok: true, result: { file_path: 'doc/a', file_size: 3, file_unique_id: 'unique' } }); if (url.includes('/file/')) return new Response('abc'); if (url.includes('deleteMessage')) return Response.json({ ok: true, result: true }); return Response.json({ ok: true, result: { username: 'bot' } }); };
     const adapter = new TelegramAdapter({ id: 'telegram', config: { chatId: '1' }, secretRefs: { tokenRef: 'TOKEN' } }, { TOKEN: 'redacted' }, fetch); const stored = await adapter.put({ objectKey: 'a.txt', name: 'a.txt', body: new Blob(['abc']), size: 3 }); assert.equal(stored.remoteId, 'remote'); assert.equal((await adapter.head({ remoteId: 'remote' })).size, 3); assert.equal(await (await adapter.get({ remoteId: 'remote' })).text(), 'abc'); await adapter.delete({ safeMetadata: stored.safeMetadata });
   });
+
+  it('treats an already deleted Telegram message as a successful delete', async () => {
+    const fetch = async url => url.includes('deleteMessage')
+      ? Response.json({ ok: false, description: 'Bad Request: message to delete not found' })
+      : Response.json({ ok: true, result: { username: 'bot' } });
+    const adapter = new TelegramAdapter({ id: 'telegram', config: { chatId: '1' }, secretRefs: { tokenRef: 'TOKEN' } }, { TOKEN: 'redacted' }, fetch);
+    await assert.doesNotReject(() => adapter.delete({ safeMetadata: { messageId: '4' } }));
+  });
 });
 
 describe('S3-compatible adapter contract', () => {
@@ -350,6 +358,19 @@ describe('read, delete, and queue recovery', () => {
     assert.equal(isExecutableStorageJob({ operation: 'DELETE_REPLICA', generation: 2 }, repository.file, tombstone), true);
   });
 
+  it('persists deletion work before using Queue delivery as a wake-up', async () => {
+    const repository = new AtomicDeletionRepository();
+    const jobs = { records: [], async create(job, options) { this.records.push({ job, options }); } };
+    const tombstone = await new FileService({ repository, jobs, storage: {} }).delete('file_1', 'admin');
+
+    assert.equal(tombstone.generation, 2);
+    assert.equal(repository.beginCalls.length, 1);
+    assert.equal(repository.beginCalls[0].jobs.length, 2);
+    assert.equal(jobs.records.length, 2);
+    assert.ok(jobs.records.every(item => item.options.essential));
+    assert.ok(jobs.records.every(item => item.job.generation === 2));
+  });
+
   it('handles duplicate recount jobs and completes deletion after all replicas are gone', async () => {
     const repository = new FileMemoryRepository();
     repository.file.status = 'deleting'; repository.file.generation = 2;
@@ -553,6 +574,32 @@ describe('zero-cost controls and security', () => {
       assert.ok(failures.some(message => message.includes('kv_namespaces')));
     } finally { rmSync(base, { recursive: true, force: true }); }
   });
+
+  it('fails the zero-cost scan when the local start command declares KV', () => {
+    const base = mkdtempSync(join(tmpdir(), 'zero-cost-package-'));
+    try {
+      mkdirSync(join(base, 'deploy/worker'), { recursive: true });
+      mkdirSync(join(base, 'functions/core/storage'), { recursive: true });
+      mkdirSync(join(base, 'functions/adapters/webdav'), { recursive: true });
+      mkdirSync(join(base, 'functions/adapters/telegram'), { recursive: true });
+      mkdirSync(join(base, 'functions/adapters/s3'), { recursive: true });
+      mkdirSync(join(base, 'functions/api/manage/ops'), { recursive: true });
+      writeFileSync(join(base, 'deploy/worker/wrangler.toml'), '[vars]\nZERO_COST_MODE = "true"\nALLOW_R2 = "false"\n');
+      writeFileSync(join(base, 'wrangler.toml.example'), '[vars]\nZERO_COST_MODE = "true"\nALLOW_R2 = "false"\n');
+      writeFileSync(join(base, 'deploy/worker/wrangler.toml.example'), '[vars]\nZERO_COST_MODE = "true"\nALLOW_R2 = "false"\n');
+      writeFileSync(join(base, 'deploy/worker/index.js'), "function zeroCostEnvironment(property) { return property === 'img_r2'; }");
+      writeFileSync(join(base, 'functions/core/storage/registry.js'), "if (channel.provider === 'r2' && !r2Allowed(env)) {}");
+      for (const file of ['functions/core/storage/orchestrator.js', 'functions/adapters/webdav/webdavAdapter.js', 'functions/adapters/telegram/telegramAdapter.js', 'functions/adapters/s3/s3Adapter.js', 'functions/api/manage/ops/channels.js']) writeFileSync(join(base, file), 'export {};');
+      writeFileSync(join(base, 'package.json'), '{"scripts":{"start":"wrangler pages dev --kv img_url"}}');
+      assert.ok(inspectZeroCostFiles(base).some(message => message.includes('Local start script')));
+    } finally { rmSync(base, { recursive: true, force: true }); }
+  });
+  it('starts the local zero-cost Worker through the project Wrangler entrypoint', () => {
+    const startup = readFileSync('scripts/start-zero-cost-worker.mjs', 'utf8');
+    assert.match(startup, /node_modules\/wrangler\/bin\/wrangler\.js/);
+    assert.match(startup, /spawn\(process\.execPath/);
+    assert.doesNotMatch(startup, /npx(?:\.cmd)?/);
+  });
   it('fails the zero-cost scan when V3 source accesses an R2 binding', () => {
     const base = mkdtempSync(join(tmpdir(), 'imgbed-zero-cost-v3-r2-'));
     try {
@@ -648,6 +695,17 @@ class FileMemoryRepository {
   async createTombstone(_id, generation) { this.file.status = 'deleting'; this.file.generation = generation + 1; this.tombstone = { generation: this.file.generation }; return this.tombstone; }
   async finalizeDeletion() { if (this.replicas.every(item => item.status === 'deleted')) this.file.status = 'deleted'; return this.file; }
   async audit(entry) { this.audits.push(entry); }
+}
+
+class AtomicDeletionRepository extends FileMemoryRepository {
+  constructor() { super(); this.beginCalls = []; }
+  async beginDeletion(input) {
+    this.beginCalls.push(input);
+    this.file.status = 'deleting';
+    this.file.generation = input.expectedGeneration + 1;
+    this.tombstone = { generation: this.file.generation };
+    return this.tombstone;
+  }
 }
 
 function readOnlyD1() {

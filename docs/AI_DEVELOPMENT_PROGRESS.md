@@ -2,7 +2,7 @@
 
 ## Current phase
 
-Phase 12 and the final capability-contract, SSRF-boundary, read-only fallback-side-effect, protected cron-redispatch, private-endpoint-bypass, checked-in Worker-template scan, V3-authoritative-read, and historical-R2-session isolation audit are complete on `feature/zero-cost-dr-v3`. The final audit closes deployment-binding, legacy-R2 isolation, legacy-KV deployment isolation, rollback-flag, management-surface, transition-audit, durable-Queue, upload-state, fair bounded maintenance-scan, silent-replica-loss recovery, sampled usage, rate-paused synchronous-upload preflight, policy-controls, D1-read estimation, metadata-size estimation, optional S3-compatible adapter support, bounded batch upload, fallback auditing, deletion recovery coverage, effective channel capability enforcement, guarded deletion retries, and scoped V3 paid-resource scan gaps identified in post-implementation review.
+Phase 12 and the final capability-contract, SSRF-boundary, read-only fallback-side-effect, protected cron-redispatch, private-endpoint-bypass, checked-in Worker-template scan, V3-authoritative-read, historical-R2-session isolation, and atomic-deletion/local-start audit are complete on `feature/zero-cost-dr-v3`. The final audit closes deployment-binding, legacy-R2 isolation, legacy-KV deployment and local-start isolation, rollback-flag, management-surface, transition-audit, durable-Queue, upload-state, fair bounded maintenance-scan, silent-replica-loss recovery, sampled usage, rate-paused synchronous-upload preflight, policy-controls, D1-read estimation, metadata-size estimation, optional S3-compatible adapter support, bounded batch upload, fallback auditing, deletion recovery coverage, effective channel capability enforcement, guarded deletion retries, and scoped V3 paid-resource scan gaps identified in post-implementation review.
 
 ## Completed
 
@@ -50,6 +50,9 @@ Phase 12 and the final capability-contract, SSRF-boundary, read-only fallback-si
 - Extended the Zero-Cost scanner to cover every checked-in Worker template, including `deploy/worker/wrangler.toml.example`; a disposable-template regression test proves a future R2 binding in that real deployment template fails CI.
 - V3 file reads now remain authoritative once `files_v3` contains the requested ID. Unexpected V3 lookup or service failures return a sanitized `503`; only a missing record, missing D1 binding, or missing V3 migration can reach the legacy route.
 - Zero-Cost mode now removes historical `cfr2` channels from the legacy channel API, rejects direct legacy R2 uploads, rejects persisted R2 chunk sessions during continuation and merge, and removes R2 from legacy automatic retry candidates. This extends the existing Worker query gate to the session-backed paths it cannot inspect.
+- Deletion initialization now persists the file state, generation-aware tombstone, replica `deleting` transitions, idempotent durable deletion jobs, and audit event in one D1 batch before any Queue wake-up. Concurrent delete requests converge safely on the original tombstone.
+- Telegram treats a remotely absent message as an already successful deletion, channel-list serialization tolerates malformed historical JSON, and synchronous upload maps each replica by channel ID rather than query order.
+- `npm start` now launches the generated zero-cost Worker with ignored local D1/Queue simulation on port 8080 and no KV/R2 binding; CI rejects a local start script that declares `--kv`.
 
 ## Not completed / deliberate limits
 
@@ -79,6 +82,7 @@ Phase 12 and the final capability-contract, SSRF-boundary, read-only fallback-si
   - Final private-endpoint audit on 2026-07-21: `npm.cmd test` - 44 unit tests and 9 integration tests passing; `npm.cmd run lint`, `npm.cmd run check:migrations`, `npm.cmd run check:secrets`, `npm.cmd run build`, binding-free `npx.cmd wrangler deploy --dry-run --config deploy/worker/wrangler.toml`, and `git diff --check` all passed. Public storage endpoints must now use HTTPS, and neither new nor legacy configuration can permit a private-network target.
   - Final Worker-template scan audit on 2026-07-21: `npm.cmd test` - 45 unit tests and 9 integration tests passing; `npm.cmd run lint`, `npm.cmd run check:migrations`, `npm.cmd run check:secrets`, `npm.cmd run build`, binding-free `npx.cmd wrangler deploy --dry-run --config deploy/worker/wrangler.toml`, and `git diff --check` all passed. The scanner now checks `deploy/worker/wrangler.toml.example` for R2, KV, Workers AI, Vectorize, Browser Rendering, Containers, and zero-cost defaults in addition to the active configuration.
   - Final V3-authoritative-read and legacy-R2-session audit on 2026-07-21: `npm.cmd test` passed with 47 unit tests and 9 integration tests; `npm.cmd run lint`, `npm.cmd run check:migrations`, `npm.cmd run check:secrets`, `npm.cmd run build`, binding-free `npx.cmd wrangler deploy --dry-run --config deploy/worker/wrangler.toml`, and `git diff --check` all passed. The generated Worker has 52 routes (9 catch-all); dry-run reported only `ASSETS` and the expected zero-cost environment variables, with no D1, Queue, KV, or R2 bindings. The provider tests remain mock/contract tests; no external WebDAV, Telegram, or S3-compatible credentials were used.
+  - Final atomic-deletion/local-start audit on 2026-07-21: `npm.cmd test` passed with 51 unit tests and 9 integration tests; `npm.cmd run lint`, `npm.cmd run check:migrations`, `npm.cmd run check:secrets`, `npm.cmd run build`, binding-free `npx.cmd wrangler deploy --dry-run --config deploy/worker/wrangler.toml`, and `git diff --check` all passed. `npm.cmd start` also built the project, launched the local zero-cost Worker, and served `http://localhost:8080/` with HTTP 200. The generated Worker has 52 routes (9 catch-all); dry-run reported only `ASSETS` and zero-cost variables. No external WebDAV, Telegram, or S3-compatible credentials were used.
 
 ## Commits created
 
@@ -105,6 +109,7 @@ Phase 12 and the final capability-contract, SSRF-boundary, read-only fallback-si
 - Latest S3/coverage patch: `e371224` `feat(storage): add optional S3-compatible DR adapter`.
 - Final capability-contract/SSRF implementation: `d7d5448` `fix(storage): enforce channel capability contracts`. It adds effective capability enforcement, configured per-channel object-size limits, guarded deletion retries, and expanded private-endpoint rejection; regression verification passed.
 - Latest V3-authoritative-read and legacy-R2-session patch: `fix(zero-cost): isolate v3 reads and legacy r2 paths`.
+- Latest final-audit commit: `fix(delete): atomically persist tombstones and deletion work`. It includes idempotent Telegram absence handling, robust channel serialization, channel-ID upload mapping, and no-KV local Worker startup.
 
 ## Key decisions
 

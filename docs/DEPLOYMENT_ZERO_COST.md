@@ -85,7 +85,13 @@ npm.cmd run deploy:worker
 
 ## Local development and test deployment
 
-Copy `.dev.vars.example` to a local untracked `.dev.vars`, replacing only the placeholders needed for the channels being tested. Do not use production credentials for local tests. Apply migrations locally, then start the Worker with local D1/Queue simulation:
+Copy `.dev.vars.example` to a local untracked `.dev.vars`, replacing only the placeholders needed for the channels being tested. Do not use production credentials for local tests. The normal local command builds the generated Worker and starts it on `http://localhost:8080` with ignored local D1/Queue simulation; it declares no KV or R2 binding:
+
+```powershell
+npm.cmd start
+```
+
+To apply migrations or use Wrangler directly, start the Worker with the explicit local configuration:
 
 ```powershell
 npx.cmd wrangler d1 migrations apply cloudflare-imgbed-zero-cost --local --config deploy/worker/wrangler.toml
