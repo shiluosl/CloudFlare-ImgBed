@@ -3,8 +3,8 @@ import { ChannelHealthService } from '../core/health/channelHealthService.js';
 
 export async function runMaintenance(env) {
   const app = runtime(env);
-  const redispatch = await app.jobs.redispatchDue(50);
   const status = await app.guard.status();
+  const redispatch = await app.jobs.redispatchDue(50, { level: status.level });
   if (status.level === 'EMERGENCY' || status.level === 'READ_ONLY') return { ...redispatch, checked: 0, scheduled: 0, protectionLevel: status.level };
   let scheduled = 0;
   if (status.level === 'NORMAL') {

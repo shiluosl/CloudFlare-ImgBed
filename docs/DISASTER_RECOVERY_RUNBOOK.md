@@ -20,7 +20,7 @@ Check channel health, credentials, queue state, and the current protection level
 
 ## Queue backlog
 
-Queue is not authoritative. The fifteen-minute cron invokes bounded `redispatchDue(50)` from D1. Inspect pending/queued/retry-wait jobs, correct the provider cause, and let the bounded redispatch resume. Duplicate Queue messages are harmless because D1 job claiming and replica operations are idempotent.
+Queue is not authoritative. The fifteen-minute cron invokes bounded `redispatchDue(50)` from D1. In `READ_ONLY`, it recovers only deletion jobs; in `WRITE_LIMITED`, it additionally permits only the repair that protects a degraded/failed file with one readable replica; in `EMERGENCY`, it does not recover or dispatch jobs. Inspect pending/queued/retry-wait jobs, correct the provider cause, and let the bounded redispatch resume. Duplicate Queue messages are harmless because D1 job claiming and replica operations are idempotent.
 
 ## Dead jobs
 

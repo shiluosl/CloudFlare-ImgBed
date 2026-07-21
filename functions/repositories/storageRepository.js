@@ -203,14 +203,23 @@ export class StorageRepository {
     return this.getJob(id);
   }
   async dueJobs(limit = 50) { return all(this.db.prepare(`SELECT * FROM storage_jobs WHERE status IN ('pending','retry_wait','queued') AND run_after <= ? ORDER BY run_after LIMIT ?`).bind(now(), Math.min(limit, 50))); }
-  async recoverExpiredLeases(limit = 50) {
-    const expired = await all(this.db.prepare(`SELECT id FROM storage_jobs
+  async listExpiredLeases(limit = 50) {
+    return all(this.db.prepare(`SELECT * FROM storage_jobs
       WHERE status='running' AND lease_until IS NOT NULL AND lease_until <= ? ORDER BY lease_until LIMIT ?`).bind(now(), Math.min(limit, 50)));
-    for (const job of expired) {
-      await this.db.prepare(`UPDATE storage_jobs SET status='retry_wait', lease_until=NULL, run_after=?, last_error_code='LEASE_EXPIRED', last_error_message='Worker lease expired before job completion', updated_at=?
-        WHERE id=? AND status='running' AND lease_until <= ?`).bind(now(), now(), job.id, now()).run();
-    }
-    return expired.length;
+  }
+  async recoverExpiredLeasesByIds(ids) {
+    const uniqueIds = [...new Set(ids)].slice(0, 50);
+    if (!uniqueIds.length) return 0;
+    const placeholders = uniqueIds.map(() => '?').join(',');
+    const timestamp = now();
+    const result = await this.db.prepare(`UPDATE storage_jobs SET status='retry_wait', lease_until=NULL, run_after=?, last_error_code='LEASE_EXPIRED', last_error_message='Worker lease expired before job completion', updated_at=?
+      WHERE id IN (${placeholders}) AND status='running' AND lease_until IS NOT NULL AND lease_until <= ?`)
+      .bind(timestamp, timestamp, ...uniqueIds, timestamp).run();
+    return result.meta?.changes || 0;
+  }
+  async recoverExpiredLeases(limit = 50) {
+    const expired = await this.listExpiredLeases(limit);
+    return this.recoverExpiredLeasesByIds(expired.map(job => job.id));
   }
   async deferJobForGuard(id, level) {
     const current = await this.getJob(id);

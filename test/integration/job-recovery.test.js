@@ -31,6 +31,55 @@ describe('D1 job and Queue recovery integration', () => {
     assert.equal(queue.messages[0].jobId, expired.id);
   });
 
+  it('in read-only mode recovers and redispatches deletion leases only', async () => {
+    const repository = new ProtectedRecoveryRepository([
+      expiredJob('job_ordinary_read_only', 'RECOUNT_FILE_HEALTH'),
+      expiredJob('job_delete_read_only', 'DELETE_REPLICA'),
+    ]);
+    const queue = new FlakyQueue(false);
+    const jobs = new JobService(repository, permissiveGuard(), queue);
+
+    const recovery = await jobs.redispatchDue(50, { level: 'READ_ONLY' });
+
+    assert.equal(recovery.recovered, 1);
+    assert.equal(recovery.dispatched, 1);
+    assert.equal((await repository.getJob('job_ordinary_read_only')).status, 'running');
+    assert.equal((await repository.getJob('job_delete_read_only')).status, 'queued');
+    assert.deepEqual(queue.messages.map(message => message.jobId), ['job_delete_read_only']);
+  });
+
+  it('in write-limited mode redispatches deletion and last-copy repair leases only', async () => {
+    const repository = new ProtectedRecoveryRepository([
+      expiredJob('job_ordinary_limited', 'RECONCILE_FILE'),
+      expiredJob('job_repair_limited', 'REPAIR_REPLICA', 'replica_target'),
+      expiredJob('job_delete_limited', 'DELETE_REPLICA'),
+    ]);
+    const queue = new FlakyQueue(false);
+    const jobs = new JobService(repository, permissiveGuard(), queue);
+
+    const recovery = await jobs.redispatchDue(50, { level: 'WRITE_LIMITED' });
+
+    assert.equal(recovery.recovered, 2);
+    assert.equal(recovery.dispatched, 2);
+    assert.equal((await repository.getJob('job_ordinary_limited')).status, 'running');
+    assert.equal((await repository.getJob('job_repair_limited')).status, 'queued');
+    assert.equal((await repository.getJob('job_delete_limited')).status, 'queued');
+    assert.deepEqual(queue.messages.map(message => message.jobId).sort(), ['job_delete_limited', 'job_repair_limited']);
+  });
+
+  it('does not recover or redispatch any lease in emergency mode', async () => {
+    const repository = new ProtectedRecoveryRepository([expiredJob('job_emergency', 'DELETE_REPLICA')]);
+    const queue = new FlakyQueue(false);
+    const jobs = new JobService(repository, permissiveGuard(), queue);
+
+    const recovery = await jobs.redispatchDue(50, { level: 'EMERGENCY' });
+
+    assert.deepEqual(recovery, { dispatched: 0, recovered: 0, protectionLevel: 'EMERGENCY' });
+    assert.equal((await repository.getJob('job_emergency')).status, 'running');
+    assert.equal(queue.messages.length, 0);
+    assert.equal(repository.listCalls, 0);
+  });
+
   it('acknowledges duplicate Queue delivery after exactly one D1 claim', async () => {
     const repository = new ConsumerRepository();
     const app = consumerApp(repository);
@@ -174,6 +223,49 @@ class JobRepository {
     }
     return expired.length;
   }
+}
+
+class ProtectedRecoveryRepository extends JobRepository {
+  constructor(jobs) {
+    super();
+    this.listCalls = 0;
+    for (const job of jobs) this.jobs.set(job.id, job);
+  }
+  async listExpiredLeases() {
+    this.listCalls += 1;
+    return [...this.jobs.values()].filter(job => job.status === 'running' && job.lease_until <= Date.now());
+  }
+  async recoverExpiredLeasesByIds(ids) {
+    for (const id of ids) {
+      const job = this.jobs.get(id);
+      if (job?.status === 'running') {
+        job.status = 'retry_wait';
+        job.lease_until = null;
+        job.run_after = Date.now() - 1;
+      }
+    }
+    return ids.length;
+  }
+  async getReplica(id) {
+    return id === 'replica_target' ? { id, role: 'sync_backup', status: 'missing', enabled: 1, health_status: 'healthy', blocked_until: null } : null;
+  }
+  async getFile() { return { id: 'file_1', status: 'degraded' }; }
+  async listReplicas() {
+    return [
+      { id: 'replica_source', role: 'primary', status: 'healthy', enabled: 1, health_status: 'healthy', blocked_until: null },
+      { id: 'replica_target', role: 'sync_backup', status: 'missing', enabled: 1, health_status: 'healthy', blocked_until: null },
+    ];
+  }
+}
+
+function expiredJob(id, operation, replicaId = null) {
+  return {
+    ...jobInput(id),
+    operation,
+    replica_id: replicaId,
+    status: 'running',
+    lease_until: Date.now() - 1,
+  };
 }
 
 class ConsumerRepository {
