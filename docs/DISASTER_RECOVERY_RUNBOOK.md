@@ -46,7 +46,7 @@ Export before risky maintenance:
 npx.cmd wrangler d1 export cloudflare-imgbed-zero-cost --remote --output d1-backup.sql
 ```
 
-For recovery, create or select a replacement D1 database, apply migrations `0030` through `0033`, import a reviewed export through the approved Cloudflare process, update the generated `DB` binding, and deploy a previously validated Worker version. Keep the original database untouched until the restored instance passes a bounded job/file reconciliation.
+For recovery, create or select a replacement D1 database, apply migrations `0030` through `0034`, import a reviewed export through the approved Cloudflare process, update the generated `DB` binding, and deploy a previously validated Worker version. Keep the original database untouched until the restored instance passes a bounded job/file reconciliation. Migration `0034` also normalizes legacy policy thresholds to the two synchronous-copy zero-cost ceiling.
 
 ## Worker rollback
 

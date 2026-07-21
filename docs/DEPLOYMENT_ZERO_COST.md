@@ -64,7 +64,7 @@ The endpoint must be HTTPS, must not embed credentials, and must be publicly rea
 
 ## Apply migrations
 
-Back up/export D1 before applying production migrations. All V3 migrations are additive and must be applied in numeric order: `0030_zero_cost_dr_v3.sql`, `0031_zero_cost_dr_health_leases.sql`, `0032_zero_cost_dr_maintenance_state.sql`, then `0033_zero_cost_dr_replica_maintenance.sql`.
+Back up/export D1 before applying production migrations. All V3 migrations are additive and must be applied in numeric order: `0030_zero_cost_dr_v3.sql`, `0031_zero_cost_dr_health_leases.sql`, `0032_zero_cost_dr_maintenance_state.sql`, `0033_zero_cost_dr_replica_maintenance.sql`, then `0034_zero_cost_dr_policy_copy_bounds.sql`. The final migration normalizes legacy V3 policy thresholds to the two synchronous-copy limit and prevents future direct D1 writes from exceeding it.
 
 ```powershell
 npx.cmd wrangler d1 migrations apply cloudflare-imgbed-zero-cost --local --config deploy/worker/wrangler.toml
