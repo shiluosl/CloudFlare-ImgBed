@@ -100,7 +100,13 @@ npx.cmd wrangler dev --local --config deploy/worker/wrangler.toml --port 8787
 
 Use a separate Cloudflare Free account or isolated Free-plan resources for a test deployment. Run the full validation commands above and `npx.cmd wrangler deploy --dry-run --config deploy/worker/wrangler.toml` before `npm.cmd run deploy:worker`. The latter requires operator-supplied D1 and Queue identifiers and is the only command in this guide that performs a real deployment.
 
-Anonymous V3 upload is disabled by default. Before enabling a future anonymous-upload route, create a free Turnstile widget in the Cloudflare dashboard, store its secret with `wrangler secret put TURNSTILE_SECRET`, configure the public site key as a non-secret variable, and require successful server-side verification before `UploadService` is called.
+Anonymous V3 upload is disabled by default. The implemented public endpoint is `POST /api/upload/v3`; it accepts multipart `file` and `policyId` fields, requires an `Idempotency-Key` header, and requires the `cf-turnstile-response` multipart field. It always creates a public `safe` upload and ignores caller-supplied owner, privacy, administrator, mode, and file-ID fields. Create a free Turnstile widget and store only its server-side secret:
+
+```powershell
+npx.cmd wrangler secret put TURNSTILE_SECRET --config deploy/worker/wrangler.toml
+```
+
+Set the widget site key only in the public client configuration, then explicitly set `ENABLE_ANONYMOUS_V3_UPLOAD=true` after the secret is present. The Worker performs a bounded server-side Siteverify request before it constructs the runtime or invokes `UploadService`; missing, rejected, timed-out, or malformed verification returns `403`. Tokens and secrets are neither logged nor included in the response. `UploadService` remains responsible for Zero Cost Guard checks, MIME and size validation, channel policy validation, replica creation, and audit persistence.
 
 The checked-in cron triggers redispatch of due D1 jobs every 15 minutes. At `NORMAL`, D1-backed cursors rotate bounded light channel checks and low-cost replica `head()` verification without KV or Durable Objects. At `WRITE_LIMITED`, verification remains paused while a separate bounded scan may enqueue only essential primary/synchronous-backup repairs that preserve the last readable copy.
 
@@ -114,7 +120,7 @@ The operations panel's database-size field is an intentionally conservative appl
 - `npm run check:zero-cost` passes.
 - Worker bindings contain `ASSETS`, `DB`, and `STORAGE_QUEUE`; no R2 or KV namespace binding exists.
 - Create WebDAV and Telegram channels through the authenticated operations API, then create a safe policy with distinct failure domains.
-- Keep anonymous V3 upload disabled unless a Turnstile-verified route is added.
+- Keep `ENABLE_ANONYMOUS_V3_UPLOAD=false` unless a free Turnstile widget, its `TURNSTILE_SECRET`, and the public client integration are configured.
 - Confirm the Cloudflare account remains on the Free plan and that Workers Paid has not been enabled.
 - Confirm the dashboard has no R2 bucket or R2 binding for this Worker; `r2_buckets` must remain absent from all deployment configuration.
 - Treat S3-compatible provider billing as an external risk, not a Cloudflare free-tier exception.
