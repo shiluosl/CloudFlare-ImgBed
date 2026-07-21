@@ -105,3 +105,7 @@ The initial deletion batch advances the logical-file generation, records the tom
 ## ADR-026: V3 logical-file reads bypass shared Cache API
 
 `/file/{fileId}` responses are always `private, no-store`, and the generated Worker bypasses both Cache API lookup and storage for that route. Cache API entries are scoped to an edge location and cannot provide a globally synchronous invalidation guarantee when a D1 tombstone is committed. Routing every V3 logical-file read through `FileService` ensures the tombstone check takes effect immediately, which is more important than public-read cache savings for deletion correctness. Cache API remains an allowed temporary optimization for non-V3 routes and is never a persistent replica.
+
+## ADR-027: Private V3 files use explicit default-deny authorization
+
+`files_v3.is_public=0` is enforced before a request reaches `FileService`. A configured user auth code, configured administrator session, or validated API token is required; when neither user nor administrator authentication is configured, only a validated API token can grant access. This intentionally differs from the historical user-auth compatibility helper, which treats an absent user auth-code configuration as public access. Failed private-file authorization returns `404` rather than `401` or `403`, so logical file IDs are not exposed as an enumeration oracle. Public V3 reads perform no security-configuration lookup and remain available at `/file/{fileId}`.

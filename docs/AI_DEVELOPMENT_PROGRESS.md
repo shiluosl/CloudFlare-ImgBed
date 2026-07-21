@@ -2,7 +2,7 @@
 
 ## Current phase
 
-Phase 12 and the final capability-contract, SSRF-boundary, read-only fallback-side-effect, protected cron-redispatch, private-endpoint-bypass, checked-in Worker-template scan, V3-authoritative-read, historical-R2-session isolation, atomic-deletion/local-start audit, and tombstone/cache-consistency audit are complete on `feature/zero-cost-dr-v3`. The final audit closes deployment-binding, legacy-R2 isolation, legacy-KV deployment and local-start isolation, rollback-flag, management-surface, transition-audit, durable-Queue, upload-state, fair bounded maintenance-scan, silent-replica-loss recovery, sampled usage, rate-paused synchronous-upload preflight, policy-controls, D1-read estimation, metadata-size estimation, optional S3-compatible adapter support, bounded batch upload, fallback auditing, deletion recovery coverage, effective channel capability enforcement, guarded deletion retries, scoped V3 paid-resource scan, and tombstone/cache-consistency gaps identified in post-implementation review.
+Phase 12 and the final capability-contract, SSRF-boundary, read-only fallback-side-effect, protected cron-redispatch, private-endpoint-bypass, checked-in Worker-template scan, V3-authoritative-read, historical-R2-session isolation, atomic-deletion/local-start audit, tombstone/cache-consistency audit, and private-read authorization audit are complete on `feature/zero-cost-dr-v3`. The final audit closes deployment-binding, legacy-R2 isolation, legacy-KV deployment and local-start isolation, rollback-flag, management-surface, transition-audit, durable-Queue, upload-state, fair bounded maintenance-scan, silent-replica-loss recovery, sampled usage, rate-paused synchronous-upload preflight, policy-controls, D1-read estimation, metadata-size estimation, optional S3-compatible adapter support, bounded batch upload, fallback auditing, deletion recovery coverage, effective channel capability enforcement, guarded deletion retries, scoped V3 paid-resource scan, tombstone/cache-consistency, and default-deny private-file-access gaps identified in post-implementation review.
 
 ## Completed
 
@@ -54,12 +54,13 @@ Phase 12 and the final capability-contract, SSRF-boundary, read-only fallback-si
 - Telegram treats a remotely absent message as an already successful deletion, channel-list serialization tolerates malformed historical JSON, and synchronous upload maps each replica by channel ID rather than query order.
 - `npm start` now launches the generated zero-cost Worker with ignored local D1/Queue simulation on port 8080 and no KV/R2 binding; CI rejects a local start script that declares `--kv`.
 - V3 logical-file reads now bypass shared Worker Cache API and return `Cache-Control: private, no-store`, so a committed tombstone cannot be bypassed by a stale per-PoP cache entry. Cache API remains limited to non-V3 temporary responses.
+- V3 private logical files now use default-deny authorization before `FileService`: a configured user auth code, configured administrator session, or validated API token is required. The historical compatibility behavior that treats an unconfigured user auth code as authorized is never used to expose a V3 private file, and failed authorization returns a non-enumerating `404`.
 
 ## Not completed / deliberate limits
 
 - Real WebDAV and Telegram end-to-end tests require operator-owned credentials and were not run.
 - Hugging Face and Discord V3 adapters are deferred until their provider contracts can receive the same isolated adapter and mock-contract treatment. S3-compatible storage is implemented as an optional external channel; its billing is outside the Cloudflare zero-cost guarantee.
-- Anonymous V3 upload remains disabled. A future endpoint must validate Turnstile before calling `UploadService`.
+- Anonymous V3 upload remains disabled while the Turnstile-gated public route is completed. It must remain default-off and validate Turnstile before calling `UploadService`.
 - Usage counters are conservative application estimates, not a substitute for Cloudflare billing telemetry.
 
 ## Latest code state

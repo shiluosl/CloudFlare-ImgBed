@@ -1,14 +1,18 @@
 import { v3ReadEnabled } from '../config.js';
+import { authorizePrivateV3Read } from '../security/privateFileAccess.js';
 
 // Returns null only when the legacy route remains the authoritative compatibility path.
 export async function tryReadV3File({ env, fileId, request }, dependencies) {
-  const { createRuntime, createFileService } = dependencies;
+  const { createRuntime, createFileService, authorizePrivateRead = authorizePrivateV3Read } = dependencies;
   if (!v3ReadEnabled(env) || !(env.DB || env.img_d1) || fileId.includes('/')) return null;
 
   try {
     const app = createRuntime(env);
     const v3File = await app.repository.getFile(fileId);
     if (!v3File) return null;
+    if (!await authorizePrivateRead({ env, request, file: v3File })) {
+      return new Response('Not Found', { status: 404 });
+    }
 
     try {
       return (await createFileService(app).read(fileId, request)).response;

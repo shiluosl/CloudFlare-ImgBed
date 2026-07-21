@@ -24,6 +24,7 @@ import { v3ReadEnabled, v3UploadEnabled } from '../functions/core/config.js';
 import { StorageOrchestrator } from '../functions/core/storage/orchestrator.js';
 import { uploadFiles } from '../functions/api/manage/ops/upload.js';
 import { tryReadV3File } from '../functions/core/files/v3ReadDispatch.js';
+import { authorizePrivateV3Read } from '../functions/core/security/privateFileAccess.js';
 import { visibleUploadChannels } from '../functions/api/channels.js';
 import { isLegacyR2ChannelForbidden } from '../functions/core/security/zeroCostLegacyGuard.js';
 import { execFileSync } from 'node:child_process';
@@ -65,6 +66,7 @@ describe('zero-cost DR core', () => {
       {
         createRuntime: () => ({ repository: { async getFile() { return existingFile; } } }),
         createFileService: () => ({ async read() { throw Object.assign(new Error('adapter failed'), { code: 'NETWORK_ERROR' }); } }),
+        authorizePrivateRead: async () => true,
       },
     );
     assert.equal(unavailable.status, 503);
@@ -75,6 +77,58 @@ describe('zero-cost DR core', () => {
       { createRuntime: () => ({ repository: { async getFile() { throw new Error('no such table: files_v3'); } } }) },
     );
     assert.equal(legacyFallback, null);
+  });
+  it('defaults private V3 reads to a non-enumerating denial without configured authentication', async () => {
+    const request = new Request('https://example.test/file/private-file');
+    let readCalls = 0;
+    const response = await tryReadV3File(
+      { env: { DB: {} }, fileId: 'private-file', request },
+      {
+        createRuntime: () => ({ repository: { async getFile() { return { id: 'private-file', is_public: 0 }; } } }),
+        createFileService: () => ({ async read() { readCalls += 1; return { response: new Response('unexpected') }; } }),
+        authorizePrivateRead: input => authorizePrivateV3Read({
+          ...input,
+          fetchSecurityConfigFn: async () => ({ auth: { user: { authCode: '' }, admin: { adminUsername: '', adminPassword: '' } } }),
+          validateApiTokenFn: async () => ({ valid: false }),
+          getDatabaseFn: () => ({}),
+        }),
+      },
+    );
+    assert.equal(response.status, 404);
+    assert.equal(readCalls, 0);
+  });
+  it('allows authenticated private V3 reads and keeps public reads authentication-free', async () => {
+    const request = new Request('https://example.test/file/file_1');
+    const privateFile = { id: 'file_1', is_public: 0 };
+    const authorized = await tryReadV3File(
+      { env: { DB: {} }, fileId: 'file_1', request },
+      {
+        createRuntime: () => ({ repository: { async getFile() { return privateFile; } } }),
+        createFileService: () => ({ async read() { return { response: new Response('private', { headers: { 'Cache-Control': 'private, no-store' } }) }; } }),
+        authorizePrivateRead: input => authorizePrivateV3Read({
+          ...input,
+          fetchSecurityConfigFn: async () => ({ auth: { user: { authCode: 'configured' }, admin: { adminUsername: '', adminPassword: '' } } }),
+          authenticateFn: async () => ({ authorized: true, authType: 'user' }),
+        }),
+      },
+    );
+    assert.equal(authorized.status, 200);
+    assert.equal(authorized.headers.get('Cache-Control'), 'private, no-store');
+
+    let securityConfigCalls = 0;
+    const publicResponse = await tryReadV3File(
+      { env: { DB: {} }, fileId: 'file_1', request },
+      {
+        createRuntime: () => ({ repository: { async getFile() { return { id: 'file_1', is_public: 1 }; } } }),
+        createFileService: () => ({ async read() { return { response: new Response('public') }; } }),
+        authorizePrivateRead: input => authorizePrivateV3Read({
+          ...input,
+          fetchSecurityConfigFn: async () => { securityConfigCalls += 1; return {}; },
+        }),
+      },
+    );
+    assert.equal(publicResponse.status, 200);
+    assert.equal(securityConfigCalls, 0);
   });
   it('keeps V3 logical-file reads out of the shared Worker Cache path', () => {
     const template = readFileSync('deploy/worker/generate-routes.js', 'utf8');
