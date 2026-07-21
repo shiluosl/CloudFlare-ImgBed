@@ -25,6 +25,7 @@ export class JobService {
     if (!job) return null;
     if (!['dead', 'retry_wait'].includes(job.status)) throw new Error('Only dead or retry_wait jobs can be retried');
     const essential = await this.isEssentialJob(job);
+    if (job.operation === 'DELETE_REPLICA') await this.guard.assertDelete({ admin: true });
     if (job.operation === 'VERIFY_REPLICA') await this.guard.assertVerify();
     if (['CREATE_REPLICA', 'REPAIR_REPLICA'].includes(job.operation)) await this.guard.assertRepair({ critical: essential });
     const pending = await this.repository.updateJob(jobId, 'pending', { runAfter: Date.now() });

@@ -1,4 +1,5 @@
 import { runtime } from '../../../core/runtime.js';
+import { hasRequiredCapabilities } from '../../../core/storage/capabilities.js';
 
 export async function onRequestGet({ request, env }) {
   const app = runtime(env);
@@ -63,7 +64,7 @@ export async function onRequestPatch({ request, env }) {
   } catch (error) { return operationError(error); }
 }
 
-async function validatePolicy(repository, body) {
+export async function validatePolicy(repository, body) {
   if (!body.name || !body.primaryChannelId || !body.syncBackupChannelId) return 'name, primaryChannelId, and syncBackupChannelId are required';
   if (!['safe', 'strict', 'fast'].includes(body.writeMode || 'safe')) return 'Unsupported writeMode';
   const requiredCopies = Number(body.requiredCopies ?? 2);
@@ -76,6 +77,7 @@ async function validatePolicy(repository, body) {
   const channels = await Promise.all(ids.map(id => repository.getChannel(id)));
   if (channels.some(channel => !channel)) return 'Every policy channel must exist';
   if (channels.some(channel => channel.provider === 'r2')) return 'R2 is disabled in Zero-Cost mode';
+  if (channels.some(channel => !hasRequiredCapabilities(channel, ['read', 'write', 'delete']))) return 'Every policy channel must support read, write, and delete operations';
   if (body.syncBackupChannelId && channels[0]?.failure_domain === channels[1]?.failure_domain) return 'Primary and sync backup channels must use different failure domains';
   return null;
 }

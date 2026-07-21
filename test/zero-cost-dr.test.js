@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { StorageError, STORAGE_ERROR_CODES } from '../functions/core/storage/adapter.js';
 import { getAdapter } from '../functions/core/storage/registry.js';
+import { effectiveChannelCapabilities } from '../functions/core/storage/capabilities.js';
 import { calculateProtectionLevel } from '../functions/core/cost/zeroCostGuard.js';
 import { d1ReadsPerSampledV3Request, recordWorkerRequestEstimate, shouldEstimateWorkerRequest, workerRequestSampleRate } from '../functions/core/cost/requestMeter.js';
 import { assertFileTransition, assertReplicaTransition, assertJobTransition } from '../functions/core/state/statusMachine.js';
@@ -18,7 +19,7 @@ import { hasSensitiveConfig, validSecretRefs, validateChannelConfig } from '../f
 import { ChannelHealthService } from '../functions/core/health/channelHealthService.js';
 import { selectRotatingCriticalReplicaMaintenance, selectRotatingHealthCheckChannels, selectRotatingReplicaMaintenance, scheduleReplicaMaintenance } from '../functions/scheduled/maintenance.js';
 import { onRequestPatch as patchChannel } from '../functions/api/manage/ops/channels.js';
-import { onRequestPost as createPolicy } from '../functions/api/manage/ops/policies.js';
+import { onRequestPost as createPolicy, validatePolicy } from '../functions/api/manage/ops/policies.js';
 import { v3ReadEnabled, v3UploadEnabled } from '../functions/core/config.js';
 import { StorageOrchestrator } from '../functions/core/storage/orchestrator.js';
 import { uploadFiles } from '../functions/api/manage/ops/upload.js';
@@ -52,6 +53,14 @@ describe('zero-cost DR core', () => {
     assert.equal(v3ReadEnabled({ ENABLE_REPLICATION_V3: 'true', ENABLE_V3_READ: 'false' }), false);
     assert.equal(v3UploadEnabled({ ENABLE_REPLICATION_V3: 'true', ENABLE_V3_UPLOAD: 'false' }), false);
     assert.equal(v3ReadEnabled({ ENABLE_REPLICATION_V3: 'false', ENABLE_V3_READ: 'true' }), false);
+  });
+  it('only lets channel configuration narrow adapter capabilities', () => {
+    const telegram = effectiveChannelCapabilities({ provider: 'telegram', capabilities_json: '{"write":false,"checksum":true,"maxObjectSize":1024}' });
+    assert.equal(telegram.write, false);
+    assert.equal(telegram.checksum, false);
+    assert.equal(telegram.maxObjectSize, 1024);
+    assert.equal(effectiveChannelCapabilities({ provider: 'webdav', capabilities_json: '{"maxObjectSize":999999999}' }).maxObjectSize, 999999999);
+    assert.equal(effectiveChannelCapabilities({ provider: 'telegram', capabilities_json: '{"maxObjectSize":999999999}' }).maxObjectSize, 20 * 1024 * 1024);
   });
 });
 
@@ -142,6 +151,7 @@ describe('upload disaster recovery workflow', () => {
   it('queues async replicas without adding them to the synchronous write set', async () => {
     const repo = new UploadMemoryRepository();
     repo.policy.async_channels_json = JSON.stringify(['async-channel']);
+    repo.channels.set('async-channel', { id: 'async-channel', provider: 'webdav', enabled: 1, health_status: 'healthy' });
     const jobs = { records: [], async create(job) { this.records.push(job); return job; } };
     const guard = { limits: { HARD_MAX_UPLOAD_BYTES: 20 * 1024 * 1024, MAX_UPLOAD_BYTES: 10 * 1024 * 1024, MAX_SYNC_CHANNELS: 2 }, async assertWrite() {}, async assertRepair() {}, async assertAsyncReplica() {}, async record() {} };
     const service = new UploadService(repo, guard, { ZERO_COST_MODE: 'true' }, jobs);
@@ -182,6 +192,19 @@ describe('upload disaster recovery workflow', () => {
     const service = new UploadService(repo, guard, { ZERO_COST_MODE: 'true' }, null);
     await assert.rejects(() => service.upload({ policyId: 'policy', idempotencyKey: 'mismatched-type', name: 'unsafe.exe', contentType: 'text/plain', size: 3, body: new Blob(['abc']), admin: true }), error => error.status === 415);
     assert.equal(repo.files.size, 0);
+  });
+
+  it('rejects restricted channel capabilities and object-size limits before creating a file', async () => {
+    const guard = { limits: { HARD_MAX_UPLOAD_BYTES: 20 * 1024 * 1024, MAX_UPLOAD_BYTES: 10 * 1024 * 1024, MAX_SYNC_CHANNELS: 2 }, async assertWrite() {}, async assertRepair() {}, async assertAsyncReplica() {}, async record() {} };
+    const noWrite = new UploadMemoryRepository();
+    noWrite.channels.set('telegram', { id: 'telegram', provider: 'telegram', enabled: 1, health_status: 'healthy', capabilities_json: '{"write":false}' });
+    await assert.rejects(() => new UploadService(noWrite, guard, {}, null).upload({ policyId: 'policy', idempotencyKey: 'no-write', name: 'demo.txt', contentType: 'text/plain', size: 3, body: new Blob(['abc']), admin: true }), /must support read, write, and delete/);
+    assert.equal(noWrite.files.size, 0);
+
+    const sizeLimited = new UploadMemoryRepository();
+    sizeLimited.channels.set('telegram', { id: 'telegram', provider: 'telegram', enabled: 1, health_status: 'healthy', capabilities_json: '{"maxObjectSize":2}' });
+    await assert.rejects(() => new UploadService(sizeLimited, guard, {}, null).upload({ policyId: 'policy', idempotencyKey: 'size-limit', name: 'demo.txt', contentType: 'text/plain', size: 3, body: new Blob(['abc']), admin: true }), error => error.status === 413);
+    assert.equal(sizeLimited.files.size, 0);
   });
 
   it('does not let an optional async replica make a missing sync backup available', async () => {
@@ -315,6 +338,16 @@ describe('read, delete, and queue recovery', () => {
     await assert.rejects(() => executeStorageJob(app, {}, { operation: 'REPAIR_REPLICA', idempotency_key: 'repair' }, { id: 'file_1', size: 3, generation: 1 }, target), error => error.code === 'CHANNEL_UNAVAILABLE');
     assert.equal(sourceOpened, false);
   });
+
+  it('does not retry deletion work while the zero-cost guard is in emergency mode', async () => {
+    const repository = {
+      async getJob() { return { id: 'job_1', status: 'dead', operation: 'DELETE_REPLICA', file_id: 'file_1', replica_id: 'rep_1' }; },
+    };
+    const guard = {
+      async assertDelete() { const error = new Error('Deletion is paused'); error.code = 'ZERO_COST_GUARD'; error.level = 'EMERGENCY'; throw error; },
+    };
+    await assert.rejects(() => new JobService(repository, guard).retry('job_1'), error => error.code === 'ZERO_COST_GUARD' && error.level === 'EMERGENCY');
+  });
 });
 
 describe('zero-cost controls and security', () => {
@@ -392,7 +425,18 @@ describe('zero-cost controls and security', () => {
   });
   it('rejects private WebDAV endpoints unless explicitly allowed', () => {
     assert.throws(() => assertExternalEndpoint('http://127.0.0.1/dav'));
+    assert.throws(() => assertExternalEndpoint('http://100.64.0.1/dav'));
+    assert.throws(() => assertExternalEndpoint('http://[::ffff:127.0.0.1]/dav'));
     assert.equal(assertExternalEndpoint('https://storage.example/dav').hostname, 'storage.example');
+  });
+  it('rejects storage policies that select a channel without the required contract', async () => {
+    const channels = new Map([
+      ['webdav', { id: 'webdav', provider: 'webdav', failure_domain: 'nas-a' }],
+      ['telegram', { id: 'telegram', provider: 'telegram', failure_domain: 'telegram', capabilities_json: '{"delete":false}' }],
+    ]);
+    const repository = { async getChannel(id) { return channels.get(id) || null; } };
+    const result = await validatePolicy(repository, { name: 'safe', primaryChannelId: 'webdav', syncBackupChannelId: 'telegram', writeMode: 'safe', requiredCopies: 2, minimumReadableCopies: 1 });
+    assert.equal(result, 'Every policy channel must support read, write, and delete operations');
   });
   it('flags active R2 bindings in deployment configuration', () => {
     const base = process.cwd();
@@ -481,13 +525,13 @@ describe('zero-cost controls and security', () => {
 });
 
 class UploadMemoryRepository {
-  constructor() { this.files = new Map(); this.replicas = new Map(); this.channels = new Map([['webdav', { id: 'webdav', enabled: 1, health_status: 'healthy' }], ['telegram', { id: 'telegram', enabled: 1, health_status: 'healthy' }]]); this.policy = { id: 'policy', enabled: 1, primary_channel_id: 'webdav', sync_backup_channel_id: 'telegram', write_mode: 'safe' }; }
+  constructor() { this.files = new Map(); this.replicas = new Map(); this.channels = new Map([['webdav', { id: 'webdav', provider: 'webdav', enabled: 1, health_status: 'healthy' }], ['telegram', { id: 'telegram', provider: 'telegram', enabled: 1, health_status: 'healthy' }]]); this.policy = { id: 'policy', enabled: 1, primary_channel_id: 'webdav', sync_backup_channel_id: 'telegram', write_mode: 'safe' }; }
   async getFileByIdempotency(key) { return [...this.files.values()].find(file => file.idempotency_key === key) || null; }
   async getPolicy() { return this.policy; }
   async createFileWithReplicas(file, specs) { const row = { ...file, idempotency_key: file.idempotencyKey, generation: 1 }; this.files.set(row.id, row); specs.forEach(spec => this.replicas.set(spec.id, { id: spec.id, file_id: row.id, channel_id: spec.channelId, role: spec.role, object_key: spec.objectKey, status: 'planned' })); return row; }
   async listReplicas(fileId) { return [...this.replicas.values()].filter(item => item.file_id === fileId); }
   async getReplica(id) { return this.replicas.get(id); }
-  async getChannel(id) { return { provider: id, config_json: '{}', secret_refs_json: '{}', ...this.channels.get(id) }; }
+  async getChannel(id) { return { config_json: '{}', secret_refs_json: '{}', ...this.channels.get(id) }; }
   async updateReplica(id, patch) { const replica = this.replicas.get(id); Object.assign(replica, patch); return replica; }
   async updateFileStatus(id, status) { const file = this.files.get(id); file.status = status; return file; }
 }

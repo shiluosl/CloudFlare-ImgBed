@@ -1,5 +1,6 @@
 import { r2Allowed } from '../config.js';
 import { StorageError, STORAGE_ERROR_CODES } from './adapter.js';
+import { providerCapabilities } from './capabilities.js';
 import { WebDavAdapter } from '../../adapters/webdav/webdavAdapter.js';
 import { TelegramAdapter } from '../../adapters/telegram/telegramAdapter.js';
 import { S3Adapter } from '../../adapters/s3/s3Adapter.js';
@@ -19,3 +20,4 @@ export function getAdapter(channel, env, fetchImpl) {
 }
 
 export const supportedProviders = () => Object.keys(factories);
+export { providerCapabilities };

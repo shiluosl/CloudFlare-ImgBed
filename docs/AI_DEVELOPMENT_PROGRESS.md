@@ -2,7 +2,7 @@
 
 ## Current phase
 
-Phase 12 and final audit are complete on `feature/zero-cost-dr-v3`. The final audit closes deployment-binding, legacy-R2 isolation, legacy-KV deployment isolation, rollback-flag, management-surface, transition-audit, durable-Queue, upload-state, fair bounded maintenance-scan, silent-replica-loss recovery, sampled usage, rate-paused synchronous-upload preflight, policy-controls, D1-read estimation, metadata-size estimation, optional S3-compatible adapter support, bounded batch upload, fallback auditing, deletion recovery coverage, and scoped V3 paid-resource scan gaps identified in post-implementation review.
+Phase 12 and the final capability-contract and SSRF-boundary audit are complete on `feature/zero-cost-dr-v3`. The final audit closes deployment-binding, legacy-R2 isolation, legacy-KV deployment isolation, rollback-flag, management-surface, transition-audit, durable-Queue, upload-state, fair bounded maintenance-scan, silent-replica-loss recovery, sampled usage, rate-paused synchronous-upload preflight, policy-controls, D1-read estimation, metadata-size estimation, optional S3-compatible adapter support, bounded batch upload, fallback auditing, deletion recovery coverage, effective channel capability enforcement, guarded deletion retries, and scoped V3 paid-resource scan gaps identified in post-implementation review.
 
 ## Completed
 
@@ -40,6 +40,8 @@ Phase 12 and final audit are complete on `feature/zero-cost-dr-v3`. The final au
 - Added sequential support for up to five multipart V3 files per request using bounded derived idempotency keys; one-file requests retain their existing response envelope and status behavior.
 - Added `file.readFallback` audit logging only when a backup read succeeds, plus a deletion-recovery integration case that reaches `delete_degraded` then finalizes after retry.
 - Extended the zero-cost scanner with V3 source checks for forbidden R2 runtime access/provider creation and prohibited paid Cloudflare features, with a disposable-source regression test.
+- Added effective channel capability calculation: persisted capabilities can only disable an Adapter operation or lower its object-size ceiling. Policy validation and upload preflight now reject selected channels without read/write/delete support before creating a logical file. Operations UI displays the effective contract rather than untrusted raw channel metadata.
+- Retrying a deletion job now follows the same Zero Cost Guard delete rule as initial deletion. Endpoint validation also rejects CGNAT and IPv4-mapped IPv6 targets to tighten SSRF protection.
 
 ## Not completed / deliberate limits
 
@@ -63,6 +65,7 @@ Phase 12 and final audit are complete on `feature/zero-cost-dr-v3`. The final au
   - `frontend-dist/ops.html` inline JavaScript syntax validation
   - Final policy and estimate audit on 2026-07-21: `npm.cmd test` - 33 unit tests and 4 integration tests passing; `npm.cmd run lint`, `npm.cmd run check:migrations`, `npm.cmd run check:secrets`, `npm.cmd run build`, and binding-free `npx.cmd wrangler deploy --dry-run --config deploy/worker/wrangler.toml` all passed. The dry run reported only `ASSETS` plus zero-cost environment variables and no D1/Queue bindings because the checked-in TOML remains intentionally identifier-free.
   - Final S3/batch/failover audit on 2026-07-21: `npm.cmd test` - 37 unit tests and 5 integration tests passing; `npm.cmd run lint`, `npm.cmd run check:migrations`, `npm.cmd run check:secrets`, `npm.cmd run build`, and binding-free `npx.cmd wrangler deploy --dry-run --config deploy/worker/wrangler.toml` all passed. The dry run reported only `ASSETS` plus zero-cost environment variables and no D1/Queue bindings because the checked-in TOML remains intentionally identifier-free.
+  - Final capability-contract/SSRF audit on 2026-07-21: `npm.cmd test` - 41 unit tests and 5 integration tests passing; `npm.cmd run lint`, `npm.cmd run check:migrations`, `npm.cmd run check:secrets`, `npm.cmd run build`, and binding-free `npx.cmd wrangler deploy --dry-run --config deploy/worker/wrangler.toml` all passed. `git diff --check` and inline JavaScript syntax validation for `frontend-dist/ops.html` also passed. Real WebDAV, Telegram, and S3-compatible end-to-end tests remain intentionally unrun because no external credentials were used.
 
 ## Commits created
 
@@ -87,6 +90,7 @@ Phase 12 and final audit are complete on `feature/zero-cost-dr-v3`. The final au
 - Latest reconciliation patch: `feat(repair): add bounded replica reconciliation`.
 - Final follow-up change set: sampled Worker/D1-read usage, bounded metadata estimates, policy health/quota enforcement, rate-paused upload preflight, complete policy operations controls, and pre-deploy binding validation.
 - Latest S3/coverage patch: `e371224` `feat(storage): add optional S3-compatible DR adapter`.
+- Final capability-contract/SSRF patch: effective capability enforcement, configured per-channel object-size limits, guarded deletion retries, and expanded private-endpoint rejection. Regression verification passed; its commit is recorded in Git history.
 
 ## Key decisions
 

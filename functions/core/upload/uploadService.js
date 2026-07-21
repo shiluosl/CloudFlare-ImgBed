@@ -1,4 +1,5 @@
 import { StorageOrchestrator } from '../storage/orchestrator.js';
+import { exceedsChannelObjectLimit, hasRequiredCapabilities } from '../storage/capabilities.js';
 
 export class UploadService {
   constructor(repository, guard, env, jobService) { this.repository = repository; this.guard = guard; this.env = env; this.jobService = jobService; this.orchestrator = new StorageOrchestrator(repository, env, jobService); }
@@ -24,10 +25,21 @@ export class UploadService {
     ];
     // Avoid creating a stranded receiving file when a required channel is already known unavailable.
     const synchronousSpecs = replicaSpecs.filter(replica => replica.role !== 'async_backup');
-    const channels = await Promise.all(synchronousSpecs.map(replica => this.repository.getChannel(replica.channelId)));
+    const allChannelIds = [...new Set(replicaSpecs.map(replica => replica.channelId))];
+    const loadedChannels = await Promise.all(allChannelIds.map(channelId => this.repository.getChannel(channelId)));
+    const channelsById = new Map(loadedChannels.filter(Boolean).map(channel => [channel.id, channel]));
+    const channels = synchronousSpecs.map(replica => channelsById.get(replica.channelId));
     if (channels.some(channel => channelUnavailable(channel))) {
       const error = new Error('A synchronous storage channel is not writable');
       error.status = 503;
+      throw error;
+    }
+    if (loadedChannels.length !== allChannelIds.length || loadedChannels.some(channel => !channel) || loadedChannels.some(channel => !hasRequiredCapabilities(channel, ['read', 'write', 'delete']))) {
+      throw new Error('Every storage channel must support read, write, and delete operations');
+    }
+    if (loadedChannels.some(channel => exceedsChannelObjectLimit(channel, input.size))) {
+      const error = new Error('File exceeds a configured storage channel object limit');
+      error.status = 413;
       throw error;
     }
     const file = await this.repository.createFileWithReplicas({ id: fileId, idempotencyKey: input.idempotencyKey, ownerId: input.ownerId, policyId: policy.id, name: safeName(input.name), contentType: input.contentType, size: input.size, isPublic: input.isPublic, status: 'receiving' }, replicaSpecs);

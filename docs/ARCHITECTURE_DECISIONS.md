@@ -77,3 +77,7 @@ V3 stores `required_copies` and `minimum_readable_copies` as bounded values from
 ## ADR-019: Optional S3-compatible storage remains outside the Cloudflare cost boundary
 
 The V3 S3-compatible adapter uses only public HTTPS S3 APIs and Worker secret-reference names for access credentials. It has no R2 binding, does not accept URL credentials, rejects unsafe/private endpoints by default, and never returns provider URLs. This permits an operator to use a separately managed S3-compatible provider as an optional replica while keeping Cloudflare deployment resources strictly limited to Workers Free, D1 Free, Queues Free, static assets, Cache API, and optional Turnstile. External provider charges remain the operator's responsibility and are displayed as a risk in operations configuration; Cloudflare R2 remains prohibited in the registry, API, deployment generator, and CI scanner.
+
+## ADR-020: Channel configuration can only narrow an adapter contract
+
+Each provider has a code-owned capability ceiling. A channel may disable an operation or lower its maximum object size through `capabilities_json`, but it cannot claim an unsupported feature or raise a provider limit. Policy creation and upload preflight require read, write, and delete capability for every selected replica channel before any logical-file row is created. This keeps the adapter contract authoritative, avoids late task failures caused by optimistic metadata, and exposes the effective capability set through the operations API.
