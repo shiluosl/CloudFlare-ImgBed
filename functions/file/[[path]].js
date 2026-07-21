@@ -20,7 +20,7 @@ import {
 import { buildCdnFileUrl } from '../utils/metadata/metadataView.js';
 import { runtime } from '../core/runtime.js';
 import { FileService } from '../core/files/fileService.js';
-import { v3ReadEnabled } from '../core/config.js';
+import { tryReadV3File } from '../core/files/v3ReadDispatch.js';
 
 
 export async function onRequest(context) {  // Contents of context object
@@ -42,21 +42,11 @@ export async function onRequest(context) {  // Contents of context object
         return new Response('Error: Decode Image ID Failed', { status: 400 });
     }
 
-    // V3 records are logical files backed by multiple external replicas. Leave legacy records untouched.
-    if (v3ReadEnabled(env) && (env.DB || env.img_d1) && !fileId.includes('/')) {
-        try {
-            const app = runtime(env);
-            const v3File = await app.repository.getFile(fileId);
-            if (v3File) {
-                return (await new FileService(app).read(fileId, request)).response;
-            }
-        } catch (error) {
-            // A missing V3 migration must not make existing upstream files unreadable.
-            if (error.code !== 'D1_REQUIRED' && !/no such table/i.test(error.message)) {
-                console.warn('V3 file read failed:', error.code || error.message);
-            }
-        }
-    }
+    const v3Response = await tryReadV3File({ env, fileId, request }, {
+        createRuntime: runtime,
+        createFileService: app => new FileService(app),
+    });
+    if (v3Response) return v3Response;
 
     // 读取安全配置，解析必要参数
     const securityConfig = await fetchSecurityConfig(env);

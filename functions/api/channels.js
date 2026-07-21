@@ -6,6 +6,40 @@ import { fetchUploadConfig } from '../utils/sysConfig.js';
 import { getUploadConfig } from './manage/sysConfig/upload.js';
 import { getDatabase } from '../utils/databaseAdapter.js';
 import { dualAuthCheck } from '../utils/auth/dualAuth.js';
+import { zeroCostEnabled } from '../core/config.js';
+
+export function visibleUploadChannels(uploadConfig, env = {}) {
+    const channels = {
+        telegram: uploadConfig.telegram.channels.map(ch => ({
+            name: ch.name,
+            type: 'TelegramNew'
+        })),
+        s3: uploadConfig.s3.channels.map(ch => ({
+            name: ch.name,
+            type: 'S3'
+        })),
+        discord: uploadConfig.discord.channels.map(ch => ({
+            name: ch.name,
+            type: 'Discord'
+        })),
+        huggingface: uploadConfig.huggingface.channels.map(ch => ({
+            name: ch.name,
+            type: 'HuggingFace'
+        })),
+        webdav: uploadConfig.webdav.channels.map(ch => ({
+            name: ch.name,
+            type: 'WebDAV'
+        }))
+    };
+
+    if (!zeroCostEnabled(env)) {
+        channels.cfr2 = uploadConfig.cfr2.channels.map(ch => ({
+            name: ch.name,
+            type: 'CloudflareR2'
+        }));
+    }
+    return channels;
+}
 
 export async function onRequest(context) {
     const { request, env } = context;
@@ -38,32 +72,7 @@ export async function onRequest(context) {
         }
 
         // 构建渠道列表，返回渠道名称和实际的 Channel 类型
-        const channels = {
-            telegram: uploadConfig.telegram.channels.map(ch => ({
-                name: ch.name,
-                type: 'TelegramNew'
-            })),
-            cfr2: uploadConfig.cfr2.channels.map(ch => ({
-                name: ch.name,
-                type: 'CloudflareR2'
-            })),
-            s3: uploadConfig.s3.channels.map(ch => ({
-                name: ch.name,
-                type: 'S3'
-            })),
-            discord: uploadConfig.discord.channels.map(ch => ({
-                name: ch.name,
-                type: 'Discord'
-            })),
-            huggingface: uploadConfig.huggingface.channels.map(ch => ({
-                name: ch.name,
-                type: 'HuggingFace'
-            })),
-            webdav: uploadConfig.webdav.channels.map(ch => ({
-                name: ch.name,
-                type: 'WebDAV'
-            }))
-        };
+        const channels = visibleUploadChannels(uploadConfig, env);
 
         return new Response(JSON.stringify(channels), {
             status: 200,

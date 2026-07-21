@@ -2,7 +2,7 @@
 
 ## Current phase
 
-Phase 12 and the final capability-contract, SSRF-boundary, read-only fallback-side-effect, protected cron-redispatch, private-endpoint-bypass, and checked-in Worker-template scan audit are complete on `feature/zero-cost-dr-v3`. The final audit closes deployment-binding, legacy-R2 isolation, legacy-KV deployment isolation, rollback-flag, management-surface, transition-audit, durable-Queue, upload-state, fair bounded maintenance-scan, silent-replica-loss recovery, sampled usage, rate-paused synchronous-upload preflight, policy-controls, D1-read estimation, metadata-size estimation, optional S3-compatible adapter support, bounded batch upload, fallback auditing, deletion recovery coverage, effective channel capability enforcement, guarded deletion retries, and scoped V3 paid-resource scan gaps identified in post-implementation review.
+Phase 12 and the final capability-contract, SSRF-boundary, read-only fallback-side-effect, protected cron-redispatch, private-endpoint-bypass, checked-in Worker-template scan, V3-authoritative-read, and historical-R2-session isolation audit are complete on `feature/zero-cost-dr-v3`. The final audit closes deployment-binding, legacy-R2 isolation, legacy-KV deployment isolation, rollback-flag, management-surface, transition-audit, durable-Queue, upload-state, fair bounded maintenance-scan, silent-replica-loss recovery, sampled usage, rate-paused synchronous-upload preflight, policy-controls, D1-read estimation, metadata-size estimation, optional S3-compatible adapter support, bounded batch upload, fallback auditing, deletion recovery coverage, effective channel capability enforcement, guarded deletion retries, and scoped V3 paid-resource scan gaps identified in post-implementation review.
 
 ## Completed
 
@@ -48,6 +48,8 @@ Phase 12 and the final capability-contract, SSRF-boundary, read-only fallback-si
 - Removed the `allowPrivateEndpoint` escape hatch. The operations API rejects it, endpoint validation has no private-address override, and WebDAV/S3 adapters reject private legacy channel records at runtime. Regression coverage verifies both the management and Adapter paths.
 - Added the requested identifier-free `deploy/worker/wrangler.toml.example`; it preserves Zero-Cost defaults and intentionally contains no D1, Queue, R2, KV, or Secret values.
 - Extended the Zero-Cost scanner to cover every checked-in Worker template, including `deploy/worker/wrangler.toml.example`; a disposable-template regression test proves a future R2 binding in that real deployment template fails CI.
+- V3 file reads now remain authoritative once `files_v3` contains the requested ID. Unexpected V3 lookup or service failures return a sanitized `503`; only a missing record, missing D1 binding, or missing V3 migration can reach the legacy route.
+- Zero-Cost mode now removes historical `cfr2` channels from the legacy channel API, rejects direct legacy R2 uploads, rejects persisted R2 chunk sessions during continuation and merge, and removes R2 from legacy automatic retry candidates. This extends the existing Worker query gate to the session-backed paths it cannot inspect.
 
 ## Not completed / deliberate limits
 
@@ -76,6 +78,7 @@ Phase 12 and the final capability-contract, SSRF-boundary, read-only fallback-si
   - Final protected-cron audit on 2026-07-21: `npm.cmd test` - 43 unit tests and 9 integration tests passing; `npm.cmd run lint`, `npm.cmd run check:migrations`, `npm.cmd run check:secrets`, `npm.cmd run build`, binding-free `npx.cmd wrangler deploy --dry-run --config deploy/worker/wrangler.toml`, and `git diff --check` all passed. The dry run reported only `ASSETS` and zero-cost environment variables.
   - Final private-endpoint audit on 2026-07-21: `npm.cmd test` - 44 unit tests and 9 integration tests passing; `npm.cmd run lint`, `npm.cmd run check:migrations`, `npm.cmd run check:secrets`, `npm.cmd run build`, binding-free `npx.cmd wrangler deploy --dry-run --config deploy/worker/wrangler.toml`, and `git diff --check` all passed. Public storage endpoints must now use HTTPS, and neither new nor legacy configuration can permit a private-network target.
   - Final Worker-template scan audit on 2026-07-21: `npm.cmd test` - 45 unit tests and 9 integration tests passing; `npm.cmd run lint`, `npm.cmd run check:migrations`, `npm.cmd run check:secrets`, `npm.cmd run build`, binding-free `npx.cmd wrangler deploy --dry-run --config deploy/worker/wrangler.toml`, and `git diff --check` all passed. The scanner now checks `deploy/worker/wrangler.toml.example` for R2, KV, Workers AI, Vectorize, Browser Rendering, Containers, and zero-cost defaults in addition to the active configuration.
+  - Final V3-authoritative-read and legacy-R2-session audit on 2026-07-21: `npm.cmd test` passed with 47 unit tests and 9 integration tests; `npm.cmd run lint`, `npm.cmd run check:migrations`, `npm.cmd run check:secrets`, `npm.cmd run build`, binding-free `npx.cmd wrangler deploy --dry-run --config deploy/worker/wrangler.toml`, and `git diff --check` all passed. The generated Worker has 52 routes (9 catch-all); dry-run reported only `ASSETS` and the expected zero-cost environment variables, with no D1, Queue, KV, or R2 bindings. The provider tests remain mock/contract tests; no external WebDAV, Telegram, or S3-compatible credentials were used.
 
 ## Commits created
 
@@ -101,6 +104,7 @@ Phase 12 and the final capability-contract, SSRF-boundary, read-only fallback-si
 - Final follow-up change set: sampled Worker/D1-read usage, bounded metadata estimates, policy health/quota enforcement, rate-paused upload preflight, complete policy operations controls, and pre-deploy binding validation.
 - Latest S3/coverage patch: `e371224` `feat(storage): add optional S3-compatible DR adapter`.
 - Final capability-contract/SSRF implementation: `d7d5448` `fix(storage): enforce channel capability contracts`. It adds effective capability enforcement, configured per-channel object-size limits, guarded deletion retries, and expanded private-endpoint rejection; regression verification passed.
+- Latest V3-authoritative-read and legacy-R2-session patch: `fix(zero-cost): isolate v3 reads and legacy r2 paths`.
 
 ## Key decisions
 
@@ -113,6 +117,7 @@ Phase 12 and the final capability-contract, SSRF-boundary, read-only fallback-si
 
 - The upstream repository has compiled static frontend assets but no practical frontend source tree. V3 therefore adds the independent authenticated `frontend-dist/ops.html` operations surface and leaves the existing frontend untouched.
 - Existing upstream R2 routes and storage code remain unmodified for backward compatibility, but V3 configuration, management APIs, adapter registry, startup command, deployment generator, and CI reject R2. Operators must not enable legacy R2 paths in a zero-cost deployment.
+- The final audit adds handler-level enforcement for legacy R2 uploads and session continuations, because a generated Worker can inspect an incoming query but cannot infer a stored upload channel without entering the route handler.
 - Read fallback, tombstone deletion, and verification/repair execution share `FileService` and the Queue consumer rather than being split into artificial files. The route-to-service-to-orchestrator-to-adapter boundary remains intact.
 - The requested S3-compatible option is implemented only as an external adapter. It has no Cloudflare R2 relation and the default stable synchronous pair remains WebDAV plus Telegram.
 

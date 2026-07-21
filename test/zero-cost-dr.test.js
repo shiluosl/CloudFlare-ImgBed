@@ -23,6 +23,9 @@ import { onRequestPost as createPolicy, validatePolicy } from '../functions/api/
 import { v3ReadEnabled, v3UploadEnabled } from '../functions/core/config.js';
 import { StorageOrchestrator } from '../functions/core/storage/orchestrator.js';
 import { uploadFiles } from '../functions/api/manage/ops/upload.js';
+import { tryReadV3File } from '../functions/core/files/v3ReadDispatch.js';
+import { visibleUploadChannels } from '../functions/api/channels.js';
+import { isLegacyR2ChannelForbidden } from '../functions/core/security/zeroCostLegacyGuard.js';
 import { execFileSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -53,6 +56,41 @@ describe('zero-cost DR core', () => {
     assert.equal(v3ReadEnabled({ ENABLE_REPLICATION_V3: 'true', ENABLE_V3_READ: 'false' }), false);
     assert.equal(v3UploadEnabled({ ENABLE_REPLICATION_V3: 'true', ENABLE_V3_UPLOAD: 'false' }), false);
     assert.equal(v3ReadEnabled({ ENABLE_REPLICATION_V3: 'false', ENABLE_V3_READ: 'true' }), false);
+  });
+  it('keeps an existing V3 logical file authoritative when its read service fails', async () => {
+    const request = new Request('https://example.test/file/file_v3');
+    const existingFile = { id: 'file_v3', status: 'available' };
+    const unavailable = await tryReadV3File(
+      { env: { DB: {} }, fileId: 'file_v3', request },
+      {
+        createRuntime: () => ({ repository: { async getFile() { return existingFile; } } }),
+        createFileService: () => ({ async read() { throw Object.assign(new Error('adapter failed'), { code: 'NETWORK_ERROR' }); } }),
+      },
+    );
+    assert.equal(unavailable.status, 503);
+    assert.equal(await unavailable.text(), 'File temporarily unavailable');
+
+    const legacyFallback = await tryReadV3File(
+      { env: { DB: {} }, fileId: 'legacy', request },
+      { createRuntime: () => ({ repository: { async getFile() { throw new Error('no such table: files_v3'); } } }) },
+    );
+    assert.equal(legacyFallback, null);
+  });
+  it('hides and rejects historical R2 upload paths in zero-cost mode', () => {
+    const uploadConfig = {
+      telegram: { channels: [{ name: 'telegram' }] },
+      cfr2: { channels: [{ name: 'r2' }] },
+      s3: { channels: [{ name: 's3' }] },
+      discord: { channels: [] },
+      huggingface: { channels: [] },
+      webdav: { channels: [{ name: 'webdav' }] },
+    };
+    const zeroCost = visibleUploadChannels(uploadConfig, { ZERO_COST_MODE: 'true' });
+    assert.equal(Object.hasOwn(zeroCost, 'cfr2'), false);
+    assert.equal(visibleUploadChannels(uploadConfig, { ZERO_COST_MODE: 'false' }).cfr2.length, 1);
+    assert.equal(isLegacyR2ChannelForbidden({ ZERO_COST_MODE: 'true' }, 'cfr2'), true);
+    assert.equal(isLegacyR2ChannelForbidden({ ZERO_COST_MODE: 'false' }, 'cfr2'), false);
+    assert.equal(isLegacyR2ChannelForbidden({ ZERO_COST_MODE: 'true' }, 'telegram'), false);
   });
   it('only lets channel configuration narrow adapter capabilities', () => {
     const telegram = effectiveChannelCapabilities({ provider: 'telegram', capabilities_json: '{"write":false,"checksum":true,"maxObjectSize":1024}' });

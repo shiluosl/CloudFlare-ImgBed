@@ -112,6 +112,7 @@ The operations panel's database-size field is an intentionally conservative appl
 - Confirm the Cloudflare account remains on the Free plan and that Workers Paid has not been enabled.
 - Confirm the dashboard has no R2 bucket or R2 binding for this Worker; `r2_buckets` must remain absent from all deployment configuration.
 - Treat S3-compatible provider billing as an external risk, not a Cloudflare free-tier exception.
+- In Zero-Cost mode, the historical `cfr2` channel is omitted from the legacy channel API and rejected by direct and resumed chunked uploads. Do not preserve or resume an R2 upload session after enabling the zero-cost deployment.
 
 ## Troubleshooting
 

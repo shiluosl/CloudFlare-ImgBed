@@ -13,6 +13,7 @@ import { HuggingFaceAPI } from "../utils/storage/huggingfaceAPI";
 import { WebDAVAPI } from "../utils/storage/webdavAPI";
 import { S3Client, PutObjectCommand } from "@aws-sdk/client-s3";
 import { getDatabase } from '../utils/databaseAdapter.js';
+import { isLegacyR2ChannelForbidden } from '../core/security/zeroCostLegacyGuard.js';
 
 
 export async function onRequest(context) {  // Contents of context object
@@ -21,6 +22,10 @@ export async function onRequest(context) {  // Contents of context object
     // 解析请求的URL，存入 context
     const url = new URL(request.url);
     context.url = url;
+
+    if (isLegacyR2ChannelForbidden(env, url.searchParams.get('uploadChannel'))) {
+        return createResponse('Error: Cloudflare R2 is disabled in zero-cost mode', { status: 403 });
+    }
 
     // 读取各项配置，存入 context
     const securityConfig = await fetchSecurityConfig(env);
@@ -288,6 +293,10 @@ function buildUploadResponse(context, returnLink) {
 async function uploadFileToCloudflareR2(context, fullId, metadata, returnLink) {
     const { env, waitUntil, uploadConfig, formdata, specifiedChannelName } = context;
     const db = getDatabase(env);
+
+    if (isLegacyR2ChannelForbidden(env, 'cfr2')) {
+        return createResponse('Error: Cloudflare R2 is disabled in zero-cost mode', { status: 403 });
+    }
 
     // 检查R2数据库是否配置
     if (typeof env.img_r2 == "undefined" || env.img_r2 == null || env.img_r2 == "") {
@@ -863,7 +872,9 @@ async function tryRetry(err, context, uploadChannel, fullId, metadata, fileExt, 
     const { env, url, formdata } = context;
 
     // 渠道列表（Discord 因为有 10MB 限制，放在最后尝试）
-    const channelList = ['CloudflareR2', 'TelegramNew', 'S3', 'HuggingFace', 'WebDAV', 'Discord'];
+    const channelList = isLegacyR2ChannelForbidden(env, 'cfr2')
+        ? ['TelegramNew', 'S3', 'HuggingFace', 'WebDAV', 'Discord']
+        : ['CloudflareR2', 'TelegramNew', 'S3', 'HuggingFace', 'WebDAV', 'Discord'];
     const errMessages = {};
     errMessages[uploadChannel] = 'Error: ' + uploadChannel + err;
 

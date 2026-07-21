@@ -5,6 +5,7 @@ import { DiscordAPI } from '../utils/storage/discordAPI';
 import { S3Client, CreateMultipartUploadCommand, UploadPartCommand, AbortMultipartUploadCommand } from "@aws-sdk/client-s3";
 import { getDatabase, checkDatabaseConfig } from '../utils/databaseAdapter.js';
 import { fetchPageConfig } from '../utils/sysConfig.js';
+import { isLegacyR2ChannelForbidden } from '../core/security/zeroCostLegacyGuard.js';
 
 // 初始化分块上传
 export async function initializeChunkedUpload(context) {
@@ -34,6 +35,9 @@ export async function initializeChunkedUpload(context) {
 
         // 获取上传渠道
         const uploadChannel = url.searchParams.get('uploadChannel') || 'telegram';
+        if (isLegacyR2ChannelForbidden(env, uploadChannel)) {
+            return createResponse('Error: Cloudflare R2 is disabled in zero-cost mode', { status: 403 });
+        }
         if (uploadChannel === 'webdav') {
             return createResponse('Error: WebDAV channel does not support chunked uploads. Please use non-chunked upload within your Cloudflare request body limit.', { status: 400 });
         }
@@ -125,6 +129,9 @@ export async function handleChunkUpload(context) {
 
         // 获取上传渠道
         const uploadChannel = url.searchParams.get('uploadChannel') || sessionInfo.uploadChannel || 'telegram';
+        if (isLegacyR2ChannelForbidden(env, uploadChannel)) {
+            return createResponse('Error: Cloudflare R2 is disabled in zero-cost mode', { status: 403 });
+        }
         if (uploadChannel === 'webdav') {
             return createResponse('Error: WebDAV channel does not support chunked uploads. Please use non-chunked upload within your Cloudflare request body limit.', { status: 400 });
         }

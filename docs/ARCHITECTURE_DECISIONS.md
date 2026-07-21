@@ -89,3 +89,11 @@ Recovering an expired Queue-worker lease is a D1 write and can immediately lead 
 ## ADR-022: Storage endpoints never allow private-network exceptions
 
 WebDAV, S3-compatible, and optional Telegram proxy URLs must resolve from a public `https` endpoint without embedded credentials. V3 rejects localhost, loopback, RFC1918, link-local, CGNAT, IPv4-mapped IPv6, and local IPv6 destinations. The former `allowPrivateEndpoint` setting is rejected by the management API and ignored by adapters, so an old D1 record cannot turn a Worker into an internal-network request proxy. Redirects remain disabled or rejected by adapters, preventing a public endpoint from redirecting to a private target.
+
+## ADR-023: A matched V3 logical file never falls through to legacy storage
+
+The `/file/{fileId}` route first checks the additive V3 logical-file record. Once a record exists, its V3 `FileService` response is authoritative: unexpected lookup or adapter failures produce a sanitized `503` rather than attempting the historical single-channel route with the same identifier. Legacy fallback is allowed only when no V3 record exists, the V3 D1 binding is unavailable, or the V3 migrations are absent during a controlled rollback. This prevents an identifier collision or runtime exception from bypassing V3 tombstone, replica-health, and access boundaries.
+
+## ADR-024: Zero-Cost mode also isolates historical R2 request surfaces
+
+Historical upstream R2 implementation remains in the repository for non-V3 compatibility, but `ZERO_COST_MODE=true` omits `cfr2` from the legacy channel-list API and rejects R2 at the legacy upload route, R2 upload function, chunked-upload initialization, and chunked-upload continuation/merge after reading a persisted session. Automatic legacy retry also removes R2 from its candidate list. This closes the gap where a session created before a configuration change could otherwise reach R2 without repeating `uploadChannel=cfr2` in the URL.

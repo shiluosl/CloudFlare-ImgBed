@@ -4,6 +4,7 @@ import { retryFailedChunks, cleanupFailedMultipartUploads, checkChunkUploadStatu
 import { S3Client, CompleteMultipartUploadCommand } from "@aws-sdk/client-s3";
 import { getDatabase } from '../utils/databaseAdapter.js';
 import { fetchPageConfig } from '../utils/sysConfig.js';
+import { isLegacyR2ChannelForbidden } from '../core/security/zeroCostLegacyGuard.js';
 
 // 处理分块合并
 export async function handleChunkMerge(context) {
@@ -47,6 +48,9 @@ export async function handleChunkMerge(context) {
 
         // 使用会话中的上传渠道，或者从URL参数获取
         uploadChannel = url.searchParams.get('uploadChannel') || sessionInfo.uploadChannel || 'telegram';
+        if (isLegacyR2ChannelForbidden(env, uploadChannel)) {
+            return createResponse('Error: Cloudflare R2 is disabled in zero-cost mode', { status: 403 });
+        }
         if (uploadChannel === 'webdav') {
             return createResponse('Error: WebDAV channel does not support chunked uploads. Please use non-chunked upload within your Cloudflare request body limit.', { status: 400 });
         }
