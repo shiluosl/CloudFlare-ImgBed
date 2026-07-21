@@ -28,3 +28,4 @@ export function r2Allowed(env = {}) { return !zeroCostEnabled(env) && isEnabled(
 export function v3Enabled(env = {}) { return isEnabled(env.ENABLE_REPLICATION_V3, true); }
 export function v3UploadEnabled(env = {}) { return v3Enabled(env) && isEnabled(env.ENABLE_V3_UPLOAD, true); }
 export function v3ReadEnabled(env = {}) { return v3Enabled(env) && isEnabled(env.ENABLE_V3_READ, true); }
+export function anonymousV3UploadEnabled(env = {}) { return v3UploadEnabled(env) && isEnabled(env.ENABLE_ANONYMOUS_V3_UPLOAD, false); }

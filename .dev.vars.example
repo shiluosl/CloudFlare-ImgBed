@@ -4,6 +4,7 @@ ALLOW_R2=false
 ENABLE_REPLICATION_V3=true
 ENABLE_V3_UPLOAD=true
 ENABLE_V3_READ=true
+ENABLE_ANONYMOUS_V3_UPLOAD=false
 WORKER_REQUEST_SAMPLE_RATE=100
 D1_READS_PER_SAMPLED_V3_REQUEST=3
 MANAGEMENT_PASSWORD=replace-in-local-development
@@ -12,6 +13,7 @@ WEBDAV_PASSWORD=replace-with-webdav-password
 TELEGRAM_BOT_TOKEN=replace-with-telegram-token
 S3_ACCESS_KEY_ID=replace-with-s3-access-key-id
 S3_SECRET_ACCESS_KEY=replace-with-s3-secret-access-key
+# Store the real value with `wrangler secret put TURNSTILE_SECRET`; never commit it.
 TURNSTILE_SECRET=replace-only-when-anonymous-upload-is-enabled
 # Optional comma-separated V3 upload policy. It can narrow the bounded default set of common file types.
 V3_ALLOWED_MIME_TYPES=image/jpeg,image/png,image/gif,image/webp,image/avif,image/svg+xml,application/pdf,text/plain,application/json,application/zip,application/gzip,video/mp4,audio/mpeg,application/octet-stream

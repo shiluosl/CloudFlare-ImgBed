@@ -20,11 +20,13 @@ import { ChannelHealthService } from '../functions/core/health/channelHealthServ
 import { selectRotatingCriticalReplicaMaintenance, selectRotatingHealthCheckChannels, selectRotatingReplicaMaintenance, scheduleReplicaMaintenance } from '../functions/scheduled/maintenance.js';
 import { onRequestPatch as patchChannel } from '../functions/api/manage/ops/channels.js';
 import { onRequestPost as createPolicy, validatePolicy } from '../functions/api/manage/ops/policies.js';
-import { v3ReadEnabled, v3UploadEnabled } from '../functions/core/config.js';
+import { anonymousV3UploadEnabled, v3ReadEnabled, v3UploadEnabled } from '../functions/core/config.js';
 import { StorageOrchestrator } from '../functions/core/storage/orchestrator.js';
 import { uploadFiles } from '../functions/api/manage/ops/upload.js';
+import { onRequestPost as anonymousUpload } from '../functions/api/upload/v3.js';
 import { tryReadV3File } from '../functions/core/files/v3ReadDispatch.js';
 import { authorizePrivateV3Read } from '../functions/core/security/privateFileAccess.js';
+import { verifyTurnstile } from '../functions/core/security/turnstile.js';
 import { visibleUploadChannels } from '../functions/api/channels.js';
 import { isLegacyR2ChannelForbidden } from '../functions/core/security/zeroCostLegacyGuard.js';
 import { execFileSync } from 'node:child_process';
@@ -259,6 +261,64 @@ describe('upload disaster recovery workflow', () => {
     assert.equal(uploadFiles(five).length, 5);
     five.append('file', new File(['x'], 'file-5.txt', { type: 'text/plain' }));
     assert.equal(uploadFiles(five).length, 6);
+  });
+  it('keeps anonymous V3 upload disabled unless explicitly enabled', async () => {
+    assert.equal(anonymousV3UploadEnabled({ ENABLE_REPLICATION_V3: 'true', ENABLE_V3_UPLOAD: 'true' }), false);
+    assert.equal(anonymousV3UploadEnabled({ ENABLE_REPLICATION_V3: 'true', ENABLE_V3_UPLOAD: 'true', ENABLE_ANONYMOUS_V3_UPLOAD: 'true' }), true);
+    const response = await anonymousUpload({ request: uploadRequest(), env: { ENABLE_REPLICATION_V3: 'true', ENABLE_V3_UPLOAD: 'true' } });
+    assert.equal(response.status, 503);
+    assert.equal((await response.json()).code, 'ANONYMOUS_UPLOAD_DISABLED');
+  });
+  it('fails closed when Turnstile is missing or rejects an anonymous V3 upload', async () => {
+    let runtimeCalls = 0;
+    let missingToken;
+    const missing = await anonymousUpload(
+      { request: uploadRequest(), env: enabledAnonymousEnv() },
+      { runtime: () => { runtimeCalls += 1; }, verifyTurnstile: async input => { missingToken = input.token; return false; } },
+    );
+    assert.equal(missing.status, 403);
+    assert.equal(missingToken, null);
+    assert.equal(runtimeCalls, 0);
+
+    const rejected = await anonymousUpload(
+      { request: uploadRequest({ turnstile: 'untrusted-token' }), env: enabledAnonymousEnv() },
+      { runtime: () => { runtimeCalls += 1; }, verifyTurnstile: async () => false },
+    );
+    assert.equal(rejected.status, 403);
+    assert.equal(runtimeCalls, 0);
+    assert.doesNotMatch(await rejected.text(), /untrusted-token|TURNSTILE_SECRET/);
+  });
+  it('uses Turnstile-gated anonymous uploads with only public safe input', async () => {
+    const received = [];
+    const audits = [];
+    const response = await anonymousUpload(
+      { request: uploadRequest({ turnstile: 'verified-token', ownerId: 'attacker', isPublic: 'false', mode: 'strict', fileId: 'chosen-id' }), env: enabledAnonymousEnv() },
+      {
+        verifyTurnstile: async input => input.token === 'verified-token' && input.secret === 'turnstile-secret',
+        runtime: () => ({
+          upload: { async upload(input) { received.push(input); return { file: { id: 'file_created', status: 'available', name: input.name, content_type: input.contentType, size: input.size }, replicas: [], degraded: false }; } },
+          repository: { async audit(entry) { audits.push(entry); } },
+        }),
+      },
+    );
+    assert.equal(response.status, 201);
+    assert.deepEqual(received[0].ownerId, null);
+    assert.equal(received[0].isPublic, true);
+    assert.equal(received[0].admin, false);
+    assert.equal(received[0].mode, 'safe');
+    assert.equal(received[0].id, undefined);
+    assert.equal(audits[0].action, 'file.anonymousUploaded');
+    assert.equal((await response.json()).url, '/file/file_created');
+  });
+  it('posts only form-encoded Turnstile verification data and never exposes it', async () => {
+    let init;
+    const valid = await verifyTurnstile({ token: 'sensitive-token', secret: 'sensitive-secret', remoteIp: '203.0.113.7', idempotencyKey: 'key', fetchFn: async (_url, input) => { init = input; return Response.json({ success: true }); } });
+    assert.equal(valid, true);
+    assert.equal(init.method, 'POST');
+    assert.equal(init.headers['Content-Type'], 'application/x-www-form-urlencoded');
+    assert.equal(init.body.get('response'), 'sensitive-token');
+    assert.equal(init.body.get('secret'), 'sensitive-secret');
+    assert.equal(await verifyTurnstile({ token: '', secret: 'sensitive-secret', fetchFn: async () => { throw new Error('should not fetch'); } }), false);
   });
 
   it('queues async replicas without adding them to the synchronous write set', async () => {
@@ -739,6 +799,21 @@ class UploadMemoryRepository {
   async getChannel(id) { return { config_json: '{}', secret_refs_json: '{}', ...this.channels.get(id) }; }
   async updateReplica(id, patch) { const replica = this.replicas.get(id); Object.assign(replica, patch); return replica; }
   async updateFileStatus(id, status) { const file = this.files.get(id); file.status = status; return file; }
+}
+
+function enabledAnonymousEnv() {
+  return { ENABLE_REPLICATION_V3: 'true', ENABLE_V3_UPLOAD: 'true', ENABLE_ANONYMOUS_V3_UPLOAD: 'true', TURNSTILE_SECRET: 'turnstile-secret' };
+}
+
+function uploadRequest({ turnstile, ownerId, isPublic, mode, fileId } = {}) {
+  const data = new FormData();
+  data.append('file', new File(['demo'], 'demo.txt', { type: 'text/plain' }));
+  if (turnstile !== undefined) data.append('cf-turnstile-response', turnstile);
+  if (ownerId !== undefined) data.append('ownerId', ownerId);
+  if (isPublic !== undefined) data.append('isPublic', isPublic);
+  if (mode !== undefined) data.append('mode', mode);
+  if (fileId !== undefined) data.append('fileId', fileId);
+  return new Request('https://example.test/api/upload/v3', { method: 'POST', headers: { 'Idempotency-Key': 'anonymous-upload-key' }, body: data });
 }
 
 class FileMemoryRepository {

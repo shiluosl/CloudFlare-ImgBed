@@ -20,6 +20,7 @@ ALLOW_R2 = "false"
 ENABLE_REPLICATION_V3 = "true"
 ENABLE_V3_UPLOAD = "true"
 ENABLE_V3_READ = "true"
+ENABLE_ANONYMOUS_V3_UPLOAD = "false"
 
 [[d1_databases]]
 binding = "DB"
