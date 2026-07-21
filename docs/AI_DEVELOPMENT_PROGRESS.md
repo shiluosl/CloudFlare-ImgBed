@@ -46,6 +46,7 @@ Phase 12 and the final capability-contract, SSRF-boundary, read-only fallback-si
 - `RECOUNT_FILE_HEALTH` and `RECONCILE_FILE` are now treated as ordinary Guarded D1 writes during Queue execution and manual retry; the consumer defers them when write protection is active instead of silently changing file state.
 - Cron now obtains the Zero Cost Guard level before recovering expired leases. `READ_ONLY` recovers and redispatches only tombstoned deletion jobs; `WRITE_LIMITED` additionally permits only degraded/failed required-replica repair with exactly one readable copy; `EMERGENCY` performs no job recovery or Queue dispatch. Recovery updates target an approved job-ID set, so paused ordinary work remains untouched.
 - Removed the `allowPrivateEndpoint` escape hatch. The operations API rejects it, endpoint validation has no private-address override, and WebDAV/S3 adapters reject private legacy channel records at runtime. Regression coverage verifies both the management and Adapter paths.
+- Added the requested identifier-free `deploy/worker/wrangler.toml.example`; it preserves Zero-Cost defaults and intentionally contains no D1, Queue, R2, KV, or Secret values.
 
 ## Not completed / deliberate limits
 

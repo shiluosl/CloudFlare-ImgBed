@@ -11,7 +11,7 @@ npx.cmd wrangler d1 create cloudflare-imgbed-zero-cost
 npx.cmd wrangler queues create imgbed-storage-zero-cost
 ```
 
-The checked-in `deploy/worker/wrangler.toml` is intentionally CI-safe and has no account-specific identifiers. Before a real deployment, set the following shell variables. `npm run deploy:worker` regenerates the file and refuses to deploy unless both V3 bindings are present. The V3 Worker permits only `ASSETS`, `DB`, and `STORAGE_QUEUE` bindings: R2 and KV namespace bindings are rejected.
+`deploy/worker/wrangler.toml.example` and the checked-in `deploy/worker/wrangler.toml` are intentionally CI-safe and have no account-specific identifiers. Before a real deployment, set the following shell variables. `npm run deploy:worker` regenerates the active TOML and refuses to deploy unless both V3 bindings are present. The V3 Worker permits only `ASSETS`, `DB`, and `STORAGE_QUEUE` bindings: R2 and KV namespace bindings are rejected.
 
 ```powershell
 $env:D1_DATABASE_ID = "the-id-returned-by-wrangler-d1-create"
