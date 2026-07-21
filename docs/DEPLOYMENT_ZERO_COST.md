@@ -74,7 +74,6 @@ npx.cmd wrangler d1 migrations apply cloudflare-imgbed-zero-cost --remote --conf
 ## Validate and deploy
 
 ```powershell
-npm.cmd ci
 npm.cmd run lint
 npm.cmd run check:migrations
 npm.cmd run check:secrets
