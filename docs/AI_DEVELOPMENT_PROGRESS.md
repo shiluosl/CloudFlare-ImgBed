@@ -112,6 +112,7 @@ Phase 12 and the final capability-contract, SSRF-boundary, read-only fallback-si
 - Final capability-contract/SSRF implementation: `d7d5448` `fix(storage): enforce channel capability contracts`. It adds effective capability enforcement, configured per-channel object-size limits, guarded deletion retries, and expanded private-endpoint rejection; regression verification passed.
 - Latest V3-authoritative-read and legacy-R2-session patch: `fix(zero-cost): isolate v3 reads and legacy r2 paths`.
 - Latest final-audit commit: `fix(delete): atomically persist tombstones and deletion work`. It includes idempotent Telegram absence handling, robust channel serialization, channel-ID upload mapping, and no-KV local Worker startup.
+- Latest tombstone/cache-consistency commit: `eefcc6a` `fix(read): prevent cached reads after tombstone deletion`. It bypasses shared Worker Cache API for V3 logical-file routes and returns `private, no-store`, so a D1 tombstone cannot be bypassed by a stale per-PoP cache entry.
 
 ## Key decisions
 
