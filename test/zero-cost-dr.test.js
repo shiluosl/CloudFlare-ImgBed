@@ -838,6 +838,8 @@ describe('zero-cost controls and security', () => {
       assert.match(readFileSync(path, 'utf8'), /binding = "STORAGE_QUEUE"/);
       assert.doesNotMatch(readFileSync(path, 'utf8'), /\[\[kv_namespaces\]\]/);
       assert.match(execFileSync(process.execPath, ['scripts/validate-worker-deployment.mjs'], { cwd: process.cwd(), stdio: 'pipe' }).toString(), /DB and STORAGE_QUEUE/);
+      assert.match(execFileSync(process.execPath, ['scripts/validate-worker-deployment.mjs', '--config', 'wrangler.toml.example'], { cwd: process.cwd(), stdio: 'pipe' }).toString(), /DB and STORAGE_QUEUE/);
+      assert.throws(() => execFileSync(process.execPath, ['scripts/validate-worker-deployment.mjs', '--config', '../outside.toml'], { cwd: process.cwd(), stdio: 'pipe' }), /repository-relative path/);
       assert.throws(() => execFileSync(process.execPath, ['deploy/worker/generate-toml.js', '--require-bindings'], {
         cwd: process.cwd(), stdio: 'pipe', env: { ...process.env, D1_DATABASE_ID: '00000000-0000-0000-0000-000000000001', STORAGE_QUEUE_NAME: 'imgbed-storage-zero-cost', KV_NAMESPACE_ID: 'forbidden-kv-binding' },
       }), /forbidden Cloudflare resource setting/);

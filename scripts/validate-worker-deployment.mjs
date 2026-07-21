@@ -1,7 +1,14 @@
 import { readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
+import { dirname, relative, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
-const configPath = resolve('deploy/worker/wrangler.toml');
+const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
+const requestedPath = parseConfigPath(process.argv.slice(2));
+const configPath = resolve(root, requestedPath);
+const relativePath = relative(root, configPath);
+if (!relativePath || relativePath.startsWith('..') || /^(?:[A-Za-z]:)?[\\/]/.test(relativePath)) {
+  throw new Error('Deployment configuration must be a repository-relative path');
+}
 const config = readFileSync(configPath, 'utf8');
 const failures = [];
 
@@ -24,3 +31,9 @@ if (failures.length) {
 }
 
 console.log('Worker deployment bindings validated: DB and STORAGE_QUEUE are configured with no forbidden Zero-Cost bindings.');
+
+function parseConfigPath(args) {
+  if (!args.length) return 'deploy/worker/wrangler.toml';
+  if (args.length === 2 && args[0] === '--config' && args[1]) return args[1];
+  throw new Error('Usage: node scripts/validate-worker-deployment.mjs [--config path/to/wrangler.toml]');
+}

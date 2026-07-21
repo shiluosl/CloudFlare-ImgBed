@@ -21,4 +21,7 @@ jobs:
       - run: npm run test:unit
       - run: npm run test:integration
       - run: npm run build
+      # The active checked-in Worker TOML is identifier-free by design. This
+      # verifies the separately checked-in binding contract without a deploy.
+      - run: node scripts/validate-worker-deployment.mjs --config wrangler.toml.example
       - run: npx wrangler deploy --dry-run --config deploy/worker/wrangler.toml

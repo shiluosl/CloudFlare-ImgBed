@@ -94,6 +94,30 @@ describe('D1 job and Queue recovery integration', () => {
     assert.equal(messages[1].acks, 1);
   });
 
+  it('retries a remote-success/D1-acknowledgement interruption without falsely marking the replica healthy', async () => {
+    const repository = new UncertainWriteRepository();
+    let writes = 0;
+    const app = uncertainWriteApp(repository, async () => {
+      writes += 1;
+      return { remoteId: `remote_${writes}`, safeMetadata: {}, size: 3 };
+    });
+
+    const first = queueMessage('job_uncertain_write');
+    await consumeStorageJobs({ messages: [first] }, {}, () => app);
+    assert.equal(writes, 1);
+    assert.equal(repository.target.status, 'uploading');
+    assert.equal(repository.job.status, 'retry_wait');
+    assert.equal(first.retries, 1);
+
+    repository.failAcknowledgement = false;
+    const second = queueMessage('job_uncertain_write');
+    await consumeStorageJobs({ messages: [second] }, {}, () => app);
+    assert.equal(writes, 2);
+    assert.equal(repository.target.status, 'healthy');
+    assert.equal(repository.job.status, 'succeeded');
+    assert.equal(second.acks, 1);
+  });
+
   it('acknowledges read-only recount delivery before claim without changing the durable job', async () => {
     const repository = new ConsumerRepository();
     const app = consumerApp(repository);
@@ -344,6 +368,31 @@ class DeletionRecoveryRepository {
   async finalizeDeletion() { if (this.replica.status === 'deleted') this.file.status = 'deleted'; return this.file; }
 }
 
+class UncertainWriteRepository extends ConsumerRepository {
+  constructor() {
+    super({
+      job: { ...jobInput('job_uncertain_write'), operation: 'REPAIR_REPLICA', replica_id: 'replica_target', channel_id: 'channel_target', generation: 1 },
+      file: { id: 'file_1', generation: 1, status: 'available', size: 3, content_type: 'text/plain', name: 'demo.txt' },
+    });
+    this.source = { id: 'replica_source', channel_id: 'channel_source', status: 'healthy', enabled: 1, health_status: 'healthy', object_key: 'file_1/demo.txt', remote_id: 'source', remote_metadata_json: '{}' };
+    this.target = { id: 'replica_target', channel_id: 'channel_target', role: 'sync_backup', status: 'retry_wait', enabled: 1, health_status: 'healthy', object_key: 'file_1/demo.txt', remote_id: null, remote_metadata_json: '{}' };
+    this.failAcknowledgement = true;
+  }
+  async getReplica(id) { return id === this.target.id ? this.target : id === this.source.id ? this.source : null; }
+  async listReplicas() { return [this.source, this.target]; }
+  async getChannel(id) { return { id, enabled: 1, health_status: 'healthy', config_json: '{}', secret_refs_json: '{}' }; }
+  async updateReplica(id, patch) {
+    const replica = await this.getReplica(id);
+    if (id === this.target.id && patch.status === 'healthy' && this.failAcknowledgement) {
+      const error = new Error('D1 acknowledgement interrupted after remote write');
+      error.code = 'D1_UNAVAILABLE';
+      throw error;
+    }
+    Object.assign(replica, patch);
+    return replica;
+  }
+}
+
 function consumerApp(repository) {
   return {
     repository,
@@ -360,6 +409,19 @@ function deletionApp(repository, remove, guard = { async assertDelete() {} }) {
     guard,
     health: { async recordFailure() {}, async recordSuccess() {} },
     storage: { async recomputeFileHealth() {} },
+  };
+}
+
+function uncertainWriteApp(repository, put) {
+  return {
+    repository,
+    adapterFor: async () => ({ put }),
+    guard: { async assertRepair() {}, async assertAsyncReplica() {}, async assertVerify() {}, async assertDelete() {}, async assertWrite() {} },
+    health: { async recordFailure() {}, async recordSuccess() {} },
+    storage: {
+      async openReplica() { return new Response('abc'); },
+      async recomputeFileHealth() {},
+    },
   };
 }
 

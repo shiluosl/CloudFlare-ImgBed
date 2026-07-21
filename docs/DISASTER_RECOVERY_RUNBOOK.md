@@ -38,6 +38,12 @@ The tombstone immediately blocks reads and late create/repair work. Delete jobs 
 
 Use low-cost `head()`, size, ETag, or provider checksum evidence first. The maintenance cursor records `missing` or `corrupt`, recalculates logical health, and creates a repair job only when a readable source and writable target exist. Do not download every file to verify integrity. After repair, verify the target and review the file health/audit records.
 
+## Remote write succeeded before D1 acknowledgement
+
+The D1 job remains the durable intent. If a Worker is interrupted after a provider accepts a replica write but before its D1 replica row is marked `healthy`, the Queue consumer leaves the job in `retry_wait`; its lease or retry is recovered by bounded D1 redispatch. It never reports that replica healthy without the D1 acknowledgement. WebDAV and S3-compatible targets use deterministic object keys, so a retry safely replaces the same object and the normal low-cost `head()` verification reconciles its metadata.
+
+Telegram's `sendDocument` API does not provide a caller-selected object key or idempotency key that can later be looked up without scanning a chat. Retrying an interrupted Telegram upload can therefore leave an untracked provider-side message, while D1 still guarantees at most one logical replica and never exposes that message as a public URL. Do not scan an entire Telegram history to reconcile it. Keep Telegram backup chats dedicated to this system, investigate only a narrow operator-selected time window when necessary, and retain the normal retry/repair job so the recorded logical replica becomes healthy. This provider limitation is a remote-storage cleanup risk, not a logical-file resurrection path.
+
 ## D1 export and restore
 
 Export before risky maintenance:
