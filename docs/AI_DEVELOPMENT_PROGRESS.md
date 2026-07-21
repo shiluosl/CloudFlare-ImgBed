@@ -122,6 +122,7 @@ Phase 12 and the final capability-contract, SSRF-boundary, read-only fallback-si
 - Latest final-audit commit: `fix(delete): atomically persist tombstones and deletion work`. It includes idempotent Telegram absence handling, robust channel serialization, channel-ID upload mapping, and no-KV local Worker startup.
 - Latest tombstone/cache-consistency commit: `eefcc6a` `fix(read): prevent cached reads after tombstone deletion`. It bypasses shared Worker Cache API for V3 logical-file routes and returns `private, no-store`, so a D1 tombstone cannot be bypassed by a stale per-PoP cache entry.
 - Latest D1 policy-boundary hardening: `fix(db): enforce synchronous replica policy bounds`. It adds migration `0034`, normalizes historical three-copy thresholds, blocks invalid direct D1 inserts/updates with triggers, and updates deployment/recovery instructions.
+- Latest legacy-management R2 isolation: `e7ac02c` `fix(zero-cost): hide legacy r2 management controls`. It prevents Zero-Cost management reads from exposing historical R2 configuration/defaults and rejects attempts to persist or select R2 through legacy management APIs.
 
 ## Key decisions
 
