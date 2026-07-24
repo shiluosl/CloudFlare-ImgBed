@@ -7,6 +7,8 @@
 import { assertExternalEndpoint } from '../../core/security/endpointValidation.js';
 
 const MAX_READ_REDIRECTS = 2;
+const MAX_READ_ATTEMPTS = 2;
+const READ_RETRY_DELAY_MS = 150;
 
 export class WebDAVAPI {
     constructor(config = {}) {
@@ -152,6 +154,29 @@ export async function fetchWebDAVRead(url, init = {}, fetchImpl = fetch) {
         return fetchImpl(url, { ...init, redirect: 'manual' });
     }
 
+    let lastError;
+    for (let attempt = 0; attempt < MAX_READ_ATTEMPTS; attempt += 1) {
+        try {
+            const response = await followWebDAVReadRedirects(url, init, method, fetchImpl);
+            if (!isRetriableReadResponse(response) || attempt === MAX_READ_ATTEMPTS - 1) {
+                return response;
+            }
+
+            await discardResponseBody(response);
+        } catch (error) {
+            lastError = error;
+            if (attempt === MAX_READ_ATTEMPTS - 1) {
+                throw error;
+            }
+        }
+
+        await delay(READ_RETRY_DELAY_MS);
+    }
+
+    throw lastError || new Error('WebDAV read failed');
+}
+
+async function followWebDAVReadRedirects(url, init, method, fetchImpl) {
     let currentUrl = String(url);
     let headers = new Headers(init.headers || {});
     for (let redirectCount = 0; redirectCount <= MAX_READ_REDIRECTS; redirectCount += 1) {
@@ -183,6 +208,22 @@ export async function fetchWebDAVRead(url, init = {}, fetchImpl = fetch) {
     }
 
     throw new Error('WebDAV read redirect rejected');
+}
+
+function isRetriableReadResponse(response) {
+    return response.status >= 500 && response.status <= 599;
+}
+
+async function discardResponseBody(response) {
+    try {
+        await response.body?.cancel();
+    } catch {
+        // The retry is still safe when the upstream response cannot be cancelled.
+    }
+}
+
+function delay(milliseconds) {
+    return new Promise(resolve => setTimeout(resolve, milliseconds));
 }
 
 export function normalizeBaseUrl(baseUrl) {

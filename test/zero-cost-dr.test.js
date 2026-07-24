@@ -249,6 +249,54 @@ describe('WebDAV adapter contract', () => {
     assert.equal(calls[1].headers.get('Range'), 'bytes=0-2');
   });
 
+  it('restarts a legacy signed download once after a transient upstream failure', async () => {
+    const calls = [];
+    const response = await fetchWebDAVRead('https://webdav.example/dav/file.png', {
+      method: 'GET',
+      headers: { Authorization: 'Basic should-not-leak', Range: 'bytes=0-2' },
+    }, async (url, init) => {
+      calls.push({ url, headers: new Headers(init.headers) });
+      if (calls.length === 1 || calls.length === 3) {
+        return new Response(null, { status: 302, headers: { Location: `https://download.example/signed-object-${calls.length}` } });
+      }
+      if (calls.length === 2) return new Response('temporary upstream failure', { status: 502 });
+      return new Response('abc', { status: 200 });
+    });
+    assert.equal(await response.text(), 'abc');
+    assert.equal(calls.length, 4);
+    assert.equal(calls[2].headers.get('Authorization'), 'Basic should-not-leak');
+    assert.equal(calls[3].headers.has('Authorization'), false);
+    assert.equal(calls[3].headers.get('Range'), 'bytes=0-2');
+  });
+
+  it('uses the same bounded safe redirect flow for V3 WebDAV reads', async () => {
+    const calls = [];
+    const adapter = new WebDavAdapter({ id: 'webdav', config: { baseUrl: 'https://webdav.example/dav' }, secretRefs: { usernameRef: 'DAV_USER', passwordRef: 'DAV_PASSWORD' } }, { DAV_USER: 'user', DAV_PASSWORD: 'password' }, async (url, init) => {
+      calls.push({ url, headers: new Headers(init.headers) });
+      if (calls.length === 1 || calls.length === 3) return new Response(null, { status: 302, headers: { Location: `https://download.example/signed-${calls.length}` } });
+      if (calls.length === 2) return new Response('temporary failure', { status: 502 });
+      return new Response('abc', { status: 200 });
+    });
+    const response = await adapter.get({ objectKey: 'file.png', range: 'bytes=0-2' });
+    assert.equal(await response.text(), 'abc');
+    assert.equal(calls.length, 4);
+    assert.match(calls[0].headers.get('Authorization'), /^Basic /);
+    assert.equal(calls[1].headers.has('Authorization'), false);
+    assert.match(calls[2].headers.get('Authorization'), /^Basic /);
+    assert.equal(calls[3].headers.has('Authorization'), false);
+    assert.equal(calls[3].headers.get('Range'), 'bytes=0-2');
+  });
+
+  it('does not retry a legacy WebDAV file miss', async () => {
+    let calls = 0;
+    const response = await fetchWebDAVRead('https://webdav.example/dav/missing.png', {}, async () => {
+      calls += 1;
+      return new Response('not found', { status: 404 });
+    });
+    assert.equal(response.status, 404);
+    assert.equal(calls, 1);
+  });
+
   it('rejects legacy WebDAV redirects to a private target without exposing the location', async () => {
     await assert.rejects(
       () => fetchWebDAVRead('https://webdav.example/dav/file.png', {}, async () => new Response(null, { status: 302, headers: { Location: 'http://127.0.0.1/private' } })),
