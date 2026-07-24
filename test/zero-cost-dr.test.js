@@ -25,6 +25,7 @@ import { anonymousV3UploadEnabled, v3ReadEnabled, v3UploadEnabled } from '../fun
 import { StorageOrchestrator } from '../functions/core/storage/orchestrator.js';
 import { uploadFiles } from '../functions/api/manage/ops/upload.js';
 import { onRequestPost as anonymousUpload } from '../functions/api/upload/v3.js';
+import { onRequestGet as v3UploadPortal } from '../functions/v3-upload.js';
 import { tryReadV3File } from '../functions/core/files/v3ReadDispatch.js';
 import { authorizePrivateV3Read } from '../functions/core/security/privateFileAccess.js';
 import { verifyTurnstile } from '../functions/core/security/turnstile.js';
@@ -483,14 +484,42 @@ describe('upload disaster recovery workflow', () => {
     assert.equal(response.status, 503);
     assert.equal((await response.json()).code, 'V3_DEFAULT_POLICY_REQUIRED');
   });
-  it('keeps the V3 upload portal session-only and submits logical upload requests', () => {
+  it('reuses the legacy uploader shell while its V3 bridge preserves session-only logical uploads', () => {
     const portal = readFileSync('frontend-dist/v3-upload.html', 'utf8');
-    assert.match(portal, /\/api\/auth\/login/);
-    assert.match(portal, /\/api\/auth\/sessionCheck/);
-    assert.match(portal, /\/api\/upload\/v3/);
-    assert.match(portal, /credentials: 'same-origin'/);
-    assert.match(portal, /Idempotency-Key': crypto\.randomUUID\(\)/);
+    const index = readFileSync('frontend-dist/index.html', 'utf8');
+    const bridge = readFileSync('frontend-dist/js/v3-upload-bridge.js', 'utf8');
+    assert.match(portal, /location\.replace\('\/\?v3=1'\)/);
+    assert.match(index, /\/js\/v3-upload-bridge\.js/);
+    assert.match(bridge, /currentUrl\.pathname === '\/v3-upload'/);
+    assert.match(bridge, /searchParams\.set\('v3', '1'\)/);
+    assert.match(bridge, /get\('v3'\) === '1'/);
+    assert.match(bridge, /\/api\/upload\/v3/);
+    assert.match(bridge, /X-V3-Legacy-UI/);
+    assert.match(bridge, /Idempotency-Key/);
+    assert.match(bridge, /initChunked/);
+    assert.match(bridge, /\/api\/fetchRes/);
     assert.doesNotMatch(portal, /localStorage|sessionStorage/);
+    assert.doesNotMatch(bridge, /localStorage|sessionStorage/);
+  });
+  it('redirects the V3 portal to the legacy Vue uploader in V3 mode', async () => {
+    const response = await v3UploadPortal({ request: new Request('https://example.test/v3-upload') });
+    assert.equal(response.status, 302);
+    assert.equal(response.headers.get('Location'), 'https://example.test/?v3=1');
+  });
+  it('returns the legacy uploader response shape only for the V3 bridge', async () => {
+    const dependencies = {
+      userAuthCheck: async () => true,
+      runtime: () => ({
+        upload: { async upload() { return { file: { id: 'file_created', status: 'available', name: 'demo.txt', content_type: 'text/plain', size: 4 }, replicas: [], degraded: false }; } },
+        repository: { async audit() {} },
+      }),
+    };
+    const env = { ENABLE_REPLICATION_V3: 'true', ENABLE_V3_UPLOAD: 'true', ENABLE_ANONYMOUS_V3_UPLOAD: 'false', V3_DEFAULT_POLICY_ID: 'safe-policy' };
+    const legacy = await anonymousUpload({ request: uploadRequest({ legacyUi: true }), env }, dependencies);
+    assert.deepEqual(await legacy.json(), [{ src: '/file/file_created', v3FileId: 'file_created', v3Status: 'available', degraded: false }]);
+
+    const api = await anonymousUpload({ request: uploadRequest(), env }, dependencies);
+    assert.equal((await api.json()).url, '/file/file_created');
   });
   it('fails closed when Turnstile is missing or rejects an anonymous V3 upload', async () => {
     let runtimeCalls = 0;
@@ -1078,7 +1107,7 @@ function enabledAnonymousEnv() {
   return { ENABLE_REPLICATION_V3: 'true', ENABLE_V3_UPLOAD: 'true', ENABLE_ANONYMOUS_V3_UPLOAD: 'true', TURNSTILE_SECRET: 'turnstile-secret' };
 }
 
-function uploadRequest({ turnstile, ownerId, isPublic, mode, fileId } = {}) {
+function uploadRequest({ turnstile, ownerId, isPublic, mode, fileId, legacyUi = false } = {}) {
   const data = new FormData();
   data.append('file', new File(['demo'], 'demo.txt', { type: 'text/plain' }));
   if (turnstile !== undefined) data.append('cf-turnstile-response', turnstile);
@@ -1086,7 +1115,9 @@ function uploadRequest({ turnstile, ownerId, isPublic, mode, fileId } = {}) {
   if (isPublic !== undefined) data.append('isPublic', isPublic);
   if (mode !== undefined) data.append('mode', mode);
   if (fileId !== undefined) data.append('fileId', fileId);
-  return new Request('https://example.test/api/upload/v3', { method: 'POST', headers: { 'Idempotency-Key': 'anonymous-upload-key' }, body: data });
+  const headers = { 'Idempotency-Key': 'anonymous-upload-key' };
+  if (legacyUi) headers['X-V3-Legacy-UI'] = '1';
+  return new Request('https://example.test/api/upload/v3', { method: 'POST', headers, body: data });
 }
 
 class FileMemoryRepository {

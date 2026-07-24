@@ -105,14 +105,14 @@ Use a separate Cloudflare Free account or isolated Free-plan resources for a tes
 
 ## Password-gated V3 portal
 
-Anonymous V3 upload is disabled by default. Configure an enabled WebDAV + Telegram `safe` policy in `/ops.html`, then set its ID as a non-secret Worker variable. The password-gated portal is available at `/v3-upload` (or `/v3-upload.html`). It reuses the upstream user upload password configured in the existing Security settings: successful `POST /api/auth/login` creates the same HttpOnly `user_session` cookie used by the legacy uploader, and the V3 page then uploads with that same-origin session.
+Anonymous V3 upload is disabled by default. Configure an enabled WebDAV + Telegram `safe` policy in `/ops.html`, then set its ID as a non-secret Worker variable. The password-gated portal is available at `/v3-upload` (or `/v3-upload.html`), and opens the original upstream Vue upload interface in V3 mode. It reuses the upstream user upload password configured in the existing Security settings: successful `POST /api/auth/login` creates the same HttpOnly `user_session` cookie used by the legacy uploader, and the V3 bridge keeps that same-origin session while submitting uploads to `/api/upload/v3`.
 
 ```powershell
 $env:V3_DEFAULT_POLICY_ID = "policy_webdav_telegram_safe"
 npm.cmd run deploy:worker
 ```
 
-The password-gated route always uses that server-selected policy and `safe` dual-write mode. It ignores browser-supplied policy, owner, visibility, administrator, mode, and file-ID fields. Each upload still requires an `Idempotency-Key`, and the page generates one per request. Do not enable anonymous uploads merely to use the V3 portal.
+The password-gated route always uses that server-selected policy and `safe` dual-write mode. It ignores browser-supplied policy, owner, visibility, administrator, mode, and file-ID fields. Each upload still requires an `Idempotency-Key`, and the bridge generates one per file request. The original UI's chunked uploads, remote URL imports, Hugging Face direct upload option, and direct provider writes are unavailable in V3 mode; select a local file no larger than the V3 hard limit of 20 MiB. UI options never select a V3 channel or policy. Do not enable anonymous uploads merely to use the V3 portal.
 
 Anonymous V3 uploads are an optional separate mode. When explicitly enabled, `POST /api/upload/v3` accepts multipart `file` and `policyId` fields, requires an `Idempotency-Key` header, and requires the `cf-turnstile-response` multipart field. It always creates a public `safe` upload and ignores caller-supplied owner, privacy, administrator, mode, and file-ID fields. Create a free Turnstile widget and store only its server-side secret:
 

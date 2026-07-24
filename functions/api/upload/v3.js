@@ -39,7 +39,7 @@ export async function onRequestPost({ request, env }, dependencies = {}) {
       admin: false,
     }),
   });
-  return uploadResponse(items);
+  return v3UploadResponse(request, items);
 }
 
 async function passwordUpload(request, env, dependencies) {
@@ -91,5 +91,22 @@ async function passwordUpload(request, env, dependencies) {
       admin: false,
     }),
   });
+  return v3UploadResponse(request, items);
+}
+
+function v3UploadResponse(request, items) {
+  if (request.headers.get('X-V3-Legacy-UI') !== '1') return uploadResponse(items);
+
+  // The upstream Vue uploader submits one file at a time and expects data[0].src.
+  // Keep its mature queue/progress UI while preserving the V3 service as the writer.
+  if (items.length === 1 && !items[0].error) {
+    const item = items[0];
+    return Response.json([{
+      src: item.url,
+      v3FileId: item.file.id,
+      v3Status: item.file.status,
+      degraded: item.degraded,
+    }]);
+  }
   return uploadResponse(items);
 }
