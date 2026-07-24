@@ -613,6 +613,7 @@ describe('read, delete, and queue recovery', () => {
     const result = await service.read('file_1', new Request('https://example.test/file/file_1'));
     assert.equal(result.response.status, 200);
     assert.equal(result.response.headers.get('Cache-Control'), 'private, no-store');
+    assert.equal(result.response.headers.get('Content-Type'), repository.file.content_type);
     assert.equal(await result.response.text(), 'backup');
     assert.equal(repository.replicas[0].status, 'suspect');
     assert.equal(jobs.records[0].operation, 'REPAIR_REPLICA');

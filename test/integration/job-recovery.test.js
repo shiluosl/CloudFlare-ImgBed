@@ -17,6 +17,18 @@ describe('D1 job and Queue recovery integration', () => {
     assert.equal((await repository.getJob(created.id)).status, 'queued');
   });
 
+  it('can immediately redispatch a pending durable job after an interrupted Queue send', async () => {
+    const repository = new JobRepository();
+    const queue = new FlakyQueue(false);
+    const jobs = new JobService(repository, permissiveGuard(), queue);
+    const created = await repository.createJob(jobInput('job_pending_manual_retry'));
+
+    const retried = await jobs.retry(created.id);
+
+    assert.equal(retried.status, 'queued');
+    assert.deepEqual(queue.messages.map(message => message.jobId), [created.id]);
+  });
+
   it('recovers an expired consumer lease and redispatches the durable job once', async () => {
     const repository = new JobRepository();
     const expired = await repository.createJob({ ...jobInput('job_expired_lease'), status: 'running' });
