@@ -133,3 +133,7 @@ The upstream management frontend and KV schema retain historical R2 fields for c
 ## ADR-033: Uncertain remote writes favor durable retry over provider scans
 
 An adapter result becomes a healthy replica only after D1 records its remote metadata. If the remote write succeeds but that acknowledgement is interrupted, the durable job retries and does not falsely mark the replica healthy. Deterministic WebDAV and S3-compatible object keys make retries naturally convergent. Telegram cannot accept a deterministic object key or a caller-provided idempotency token through `sendDocument`, and reconstructing an unknown successful send would require a prohibited chat-history scan. The system therefore preserves logical-file safety and bounded retry semantics, documents the possible orphaned Telegram message, and leaves narrow manual cleanup to the operator rather than spending free-tier capacity on global discovery.
+
+## ADR-034: Primary switching remains inside the synchronous replica pair
+
+The operations API only promotes a healthy `sync_backup` (or leaves the current healthy `primary` unchanged). It never promotes an `async_backup`; the repository atomically swaps the existing primary and synchronous backup roles. This preserves the logical model of exactly one primary plus one synchronous backup and keeps asynchronous replicas from accidentally satisfying or reshaping the synchronous availability policy.

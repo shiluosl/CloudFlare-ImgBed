@@ -24,11 +24,14 @@ $env:STORAGE_QUEUE_NAME = "imgbed-storage-zero-cost"
 Do not put values in D1, `wrangler.toml`, `WORKER_VARS`, or Git. Use interactive secret entry:
 
 ```powershell
-npx.cmd wrangler secret put MANAGEMENT_PASSWORD --config deploy/worker/wrangler.toml
+npx.cmd wrangler secret put BASIC_USER --config deploy/worker/wrangler.toml
+npx.cmd wrangler secret put BASIC_PASS --config deploy/worker/wrangler.toml
 npx.cmd wrangler secret put WEBDAV_USERNAME --config deploy/worker/wrangler.toml
 npx.cmd wrangler secret put WEBDAV_PASSWORD --config deploy/worker/wrangler.toml
 npx.cmd wrangler secret put TELEGRAM_BOT_TOKEN --config deploy/worker/wrangler.toml
 ```
+
+`BASIC_USER` and `BASIC_PASS` are the initial administrator login credentials. They are Worker Secrets, not D1 values. `MANAGEMENT_PASSWORD` is not used by the deployed administrator-authentication flow.
 
 Channel records save only secret reference names, such as `WEBDAV_PASSWORD` or `TELEGRAM_BOT_TOKEN`. `.dev.vars.example` documents local placeholders; `.dev.vars` is ignored.
 

@@ -15,9 +15,9 @@ export function createDatabaseAdapter(env) {
     if (env.img_url && typeof env.img_url.get === 'function') {
         // 使用KV存储
         return new KVAdapter(env.img_url);
-    } else if (env.img_d1 && typeof env.img_d1.prepare === 'function') {
+    } else if ((env.DB || env.img_d1) && typeof (env.DB || env.img_d1).prepare === 'function') {
         // 使用D1数据库
-        return new D1Database(env.img_d1);
+        return new D1Database(env.DB || env.img_d1);
     } else {
         console.error('No database configured. Please configure either KV (env.img_url) or D1 (env.img_d1).');
         return null;
@@ -159,7 +159,8 @@ export function getDatabase(env) {
  * @returns {Object} 配置信息
  */
 export function checkDatabaseConfig(env) {
-    var hasD1 = env.img_d1 && typeof env.img_d1.prepare === 'function';
+    var d1 = env.DB || env.img_d1;
+    var hasD1 = d1 && typeof d1.prepare === 'function';
     var hasKV = env.img_url && typeof env.img_url.get === 'function';
 
     return {

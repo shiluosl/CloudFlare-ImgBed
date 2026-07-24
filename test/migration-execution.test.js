@@ -52,4 +52,15 @@ describe('zero-cost D1 migrations', () => {
     assert.throws(() => db.prepare('UPDATE storage_policies SET minimum_readable_copies=3 WHERE id=?').run('valid'), /two synchronous-copy limit/);
     db.close();
   });
+
+  it('keeps legacy initialization compatible with the historical tags migration', () => {
+    const db = new Database(':memory:');
+    const root = resolve('database');
+    db.exec(readFileSync(join(root, 'init.sql'), 'utf8'));
+    db.exec(readFileSync(join(root, 'migrations', 'v2.2.1_add_tags_column.sql'), 'utf8'));
+    const columns = db.prepare("PRAGMA table_info('files')").all().map(column => column.name);
+
+    assert.ok(columns.includes('tags'));
+    db.close();
+  });
 });

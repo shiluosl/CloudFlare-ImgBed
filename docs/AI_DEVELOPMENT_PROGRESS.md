@@ -2,6 +2,8 @@
 
 ## Current phase
 
+Phase 12 final audit is complete. The deployed Worker was validated on 2026-07-24 with real WebDAV and Telegram credentials: a private `safe` upload reached `available` with two healthy replicas, the unified `/file/{fileId}` read returned the exact uploaded bytes with `Cache-Control: private, no-store`, and tombstone deletion finalized both replicas. Primary switching accepts only a healthy `primary` or `sync_backup` replica; a migration-backed SQLite regression test verifies that promoting the synchronous backup leaves asynchronous replicas unchanged. The remaining work is commit and feature-branch push.
+
 Phase 12 and the final capability-contract, SSRF-boundary, read-only fallback-side-effect, protected cron-redispatch, private-endpoint-bypass, checked-in Worker-template scan, V3-authoritative-read, historical-R2-session isolation, atomic-deletion/local-start audit, tombstone/cache-consistency audit, private-read authorization audit, D1 policy-threshold audit, legacy-management R2 configuration audit, CI binding-contract validation, and remote-success/D1-acknowledgement interruption audit are complete on `feature/zero-cost-dr-v3`. The final audit closes deployment-binding, legacy-R2 isolation, legacy-KV deployment and local-start isolation, rollback-flag, management-surface, transition-audit, durable-Queue, upload-state, fair bounded maintenance-scan, silent-replica-loss recovery, sampled usage, rate-paused synchronous-upload preflight, policy-controls, D1-read estimation, metadata-size estimation, optional S3-compatible adapter support, bounded batch upload, fallback auditing, deletion recovery coverage, effective channel capability enforcement, guarded deletion retries, scoped V3 paid-resource scan, tombstone/cache-consistency, default-deny private-file-access, database-level policy-threshold, historical legacy-R2 management, CI deployment-binding, and uncertain-remote-write gaps identified in post-implementation review.
 
 ## Completed
@@ -64,7 +66,7 @@ Phase 12 and the final capability-contract, SSRF-boundary, read-only fallback-si
 
 ## Not completed / deliberate limits
 
-- Real WebDAV and Telegram end-to-end tests require operator-owned credentials and were not run.
+- A real WebDAV + Telegram production smoke test was completed on 2026-07-24. The test uploaded a unique private text object through `policy_webdav_telegram_safe`, verified `available` plus healthy WebDAV/Telegram replicas, read it only through the logical URL, checked that the operations response did not expose provider URLs, and confirmed finalized tombstone deletion. S3-compatible end-to-end testing remains intentionally unrun.
 - Hugging Face and Discord V3 adapters are deferred until their provider contracts can receive the same isolated adapter and mock-contract treatment. S3-compatible storage is implemented as an optional external channel; its billing is outside the Cloudflare zero-cost guarantee.
 - Anonymous V3 upload is implemented at `POST /api/upload/v3`, but remains default-disabled. When explicitly enabled, it requires successful server-side Turnstile verification before runtime construction, forces public `safe` inputs, strips caller-controlled ownership and visibility fields, and still uses `UploadService` for Zero Cost Guard, validation, dual-write, and auditing.
 - Usage counters are conservative application estimates, not a substitute for Cloudflare billing telemetry.
@@ -128,6 +130,7 @@ Phase 12 and the final capability-contract, SSRF-boundary, read-only fallback-si
 - Latest D1 policy-boundary hardening: `fix(db): enforce synchronous replica policy bounds`. It adds migration `0034`, normalizes historical three-copy thresholds, blocks invalid direct D1 inserts/updates with triggers, and updates deployment/recovery instructions.
 - Latest legacy-management R2 isolation: `e7ac02c` `fix(zero-cost): hide legacy r2 management controls`. It prevents Zero-Cost management reads from exposing historical R2 configuration/defaults and rejects attempts to persist or select R2 through legacy management APIs.
 - Channel metadata edits are intentionally limited to failure domain and read priority, preserving the prohibition on changing provider configuration or Secret references through this operations action.
+- Primary switching is restricted to the synchronous replica pair; a healthy asynchronous copy can be read or used as a repair source but cannot replace the policy primary.
 
 ## Key decisions
 
@@ -147,11 +150,11 @@ Phase 12 and the final capability-contract, SSRF-boundary, read-only fallback-si
 ## Next actions
 
 1. Apply `0030_zero_cost_dr_v3.sql` through `0034_zero_cost_dr_policy_copy_bounds.sql` in order to an operator-owned D1 database before a real deployment.
-2. Configure dedicated non-production WebDAV, Telegram, and optional S3-compatible credentials before external end-to-end tests.
+2. Configure dedicated non-production WebDAV, Telegram, and optional S3-compatible credentials before repeating external end-to-end tests outside the deployed production smoke path.
 
 ## Known limits
 
-- The current test suite is local and mock-backed for external providers. No real WebDAV, Telegram, or S3-compatible credentials were used.
+- The automated suite is local and mock-backed for external providers. A single controlled real WebDAV + Telegram production smoke test passed on 2026-07-24; S3-compatible end-to-end testing remains unrun.
 - Legacy upstream R2 implementation files remain for compatibility, but the zero-cost Worker configuration contains no R2 binding and the V3 adapter/API paths reject R2.
 - Historical R2 KV records remain for non-zero-cost compatibility, but Zero-Cost management reads cannot expose or select them and management writes cannot reactivate them.
 - The static `wrangler deploy --dry-run` uses the binding-free checked-in TOML; it validates generated Worker syntax and configuration only. A deployment-capable configuration is generated only by `npm run deploy:worker` with `D1_DATABASE_ID` and `STORAGE_QUEUE_NAME` supplied by the operator.
