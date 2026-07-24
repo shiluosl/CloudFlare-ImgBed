@@ -166,7 +166,8 @@ export class StorageRepository {
   async getReplica(id) { return first(this.db.prepare('SELECT * FROM file_replicas WHERE id=?').bind(id)); }
   async switchPrimaryReplica(fileId, replicaId) {
     const replica = await this.getReplica(replicaId);
-    if (!replica || replica.file_id !== fileId || replica.status !== 'healthy') return null;
+    // Keep the logical file in its fixed primary + synchronous-backup shape.
+    if (!replica || replica.file_id !== fileId || replica.status !== 'healthy' || !['primary', 'sync_backup'].includes(replica.role)) return null;
     await this.db.batch([
       this.db.prepare("UPDATE file_replicas SET role='sync_backup', updated_at=? WHERE file_id=? AND role='primary' AND id<>?").bind(now(), fileId, replicaId),
       this.db.prepare("UPDATE file_replicas SET role='primary', updated_at=? WHERE id=? AND file_id=? AND status='healthy'").bind(now(), replicaId, fileId),

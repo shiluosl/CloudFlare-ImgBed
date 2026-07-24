@@ -22,13 +22,25 @@ describe('D1 job and Queue recovery integration', () => {
     const expired = await repository.createJob({ ...jobInput('job_expired_lease'), status: 'running' });
     expired.lease_until = Date.now() - 1;
     const queue = new FlakyQueue(false);
-    const jobs = new JobService(repository, permissiveGuard(), queue);
+    const jobs = new JobService(repository, { ...permissiveGuard(), async assertWrite() {} }, queue);
 
     const recovery = await jobs.redispatchDue();
     assert.equal(recovery.recovered, 1);
     assert.equal(recovery.dispatched, 1);
     assert.equal((await repository.getJob(expired.id)).status, 'queued');
     assert.equal(queue.messages[0].jobId, expired.id);
+  });
+
+  it('allows an operator to requeue a durable job after Queue-side retries are exhausted', async () => {
+    const repository = new JobRepository();
+    const queued = await repository.createJob({ ...jobInput('job_queue_exhausted'), status: 'queued' });
+    const queue = new FlakyQueue(false);
+    const jobs = new JobService(repository, permissiveGuard(), queue);
+
+    const retried = await jobs.retry(queued.id);
+
+    assert.equal(retried.status, 'queued');
+    assert.deepEqual(queue.messages.map(message => message.jobId), [queued.id]);
   });
 
   it('in read-only mode recovers and redispatches deletion leases only', async () => {
@@ -177,6 +189,24 @@ describe('D1 job and Queue recovery integration', () => {
     assert.equal(repository.job.status, 'succeeded');
   });
 
+  it('finalizes tombstoned deletion when an untracked Telegram send never produced a message identity', async () => {
+    const repository = new DeletionRecoveryRepository();
+    let deleteCalls = 0;
+    const app = deletionApp(repository, async input => {
+      deleteCalls += 1;
+      assert.equal(input.safeMetadata.messageId, undefined);
+      return { deleted: true, alreadyAbsent: true };
+    });
+    const message = queueMessage('job_delete_recovery');
+
+    await consumeStorageJobs({ messages: [message] }, {}, () => app);
+
+    assert.equal(deleteCalls, 1);
+    assert.equal(repository.replica.status, 'deleted');
+    assert.equal(repository.file.status, 'deleted');
+    assert.equal(repository.job.status, 'succeeded');
+  });
+
   it('cancels late create and repair work when a tombstone advances the generation', async () => {
     const repository = new ConsumerRepository({
       job: { ...jobInput('job_late_repair'), operation: 'REPAIR_REPLICA', replica_id: 'replica_1', generation: 1 },
@@ -227,6 +257,7 @@ function jobInput(id) {
 
 function permissiveGuard() {
   return {
+    async assertWrite() {},
     async assertQueue() {},
     async record() {},
   };

@@ -37,6 +37,11 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
 describe('zero-cost DR core', () => {
+  it('invokes the queue consumer with its default runtime factory', () => {
+    const template = readFileSync('deploy/worker/generate-routes.js', 'utf8');
+    assert.match(template, /consumeStorageJobs\(batch, zeroCostEnvironment\(env\)\);/);
+    assert.doesNotMatch(template, /consumeStorageJobs\(batch, zeroCostEnvironment\(env\), ctx\)/);
+  });
   it('rejects R2 in zero-cost mode', () => {
     assert.throws(() => getAdapter({ id: 'r2', provider: 'r2' }, { ZERO_COST_MODE: 'true', ALLOW_R2: 'false' }), error => error instanceof StorageError && error.code === STORAGE_ERROR_CODES.UNSUPPORTED);
   });
@@ -218,7 +223,7 @@ describe('WebDAV adapter contract', () => {
 
 describe('Telegram adapter contract', () => {
   it('maps Telegram upload, read, head, delete, and rate limit errors', async () => {
-    const fetch = async (url, init = {}) => { if (url.includes('sendDocument')) return Response.json({ ok: true, result: { message_id: 4, document: { file_id: 'remote', file_unique_id: 'unique', file_size: 3 } } }); if (url.includes('getFile')) return Response.json({ ok: true, result: { file_path: 'doc/a', file_size: 3, file_unique_id: 'unique' } }); if (url.includes('/file/')) return new Response('abc'); if (url.includes('deleteMessage')) return Response.json({ ok: true, result: true }); return Response.json({ ok: true, result: { username: 'bot' } }); };
+    const fetch = async (url, init = {}) => { if (url.includes('sendDocument')) { assert.match(init.headers['Content-Type'], /^multipart\/form-data; boundary=/); assert.equal(typeof init.body.getReader, 'function'); return Response.json({ ok: true, result: { message_id: 4, document: { file_id: 'remote', file_unique_id: 'unique', file_size: 3 } } }); } if (url.includes('getFile')) return Response.json({ ok: true, result: { file_path: 'doc/a', file_size: 3, file_unique_id: 'unique' } }); if (url.includes('/file/')) return new Response('abc'); if (url.includes('deleteMessage')) return Response.json({ ok: true, result: true }); return Response.json({ ok: true, result: { username: 'bot' } }); };
     const adapter = new TelegramAdapter({ id: 'telegram', config: { chatId: '1' }, secretRefs: { tokenRef: 'TOKEN' } }, { TOKEN: 'redacted' }, fetch); const stored = await adapter.put({ objectKey: 'a.txt', name: 'a.txt', body: new Blob(['abc']), size: 3 }); assert.equal(stored.remoteId, 'remote'); assert.equal((await adapter.head({ remoteId: 'remote' })).size, 3); assert.equal(await (await adapter.get({ remoteId: 'remote' })).text(), 'abc'); await adapter.delete({ safeMetadata: stored.safeMetadata });
   });
 
@@ -228,6 +233,46 @@ describe('Telegram adapter contract', () => {
       : Response.json({ ok: true, result: { username: 'bot' } });
     const adapter = new TelegramAdapter({ id: 'telegram', config: { chatId: '1' }, secretRefs: { tokenRef: 'TOKEN' } }, { TOKEN: 'redacted' }, fetch);
     await assert.doesNotReject(() => adapter.delete({ safeMetadata: { messageId: '4' } }));
+  });
+
+  it('treats a Telegram replica without a persisted message identity as already absent during deletion', async () => {
+    let calls = 0;
+    const adapter = new TelegramAdapter({ id: 'telegram', config: { chatId: '1' }, secretRefs: { tokenRef: 'TOKEN' } }, { TOKEN: 'redacted' }, async () => {
+      calls += 1;
+      return Response.json({ ok: true, result: true });
+    });
+    const result = await adapter.delete({ safeMetadata: {} });
+    assert.deepEqual(result, { deleted: true, alreadyAbsent: true });
+    assert.equal(calls, 0);
+  });
+
+  it('checks configured chat posting access without creating a test document', async () => {
+    const calls = [];
+    const fetch = async url => {
+      calls.push(url);
+      if (url.includes('getMe')) return Response.json({ ok: true, result: { id: 5, username: 'bot' } });
+      if (url.includes('getChatMember')) return Response.json({ ok: true, result: { status: 'administrator', can_post_messages: true } });
+      if (url.includes('getChat')) return Response.json({ ok: true, result: { type: 'channel' } });
+      throw new Error('Unexpected Telegram operation');
+    };
+    const adapter = new TelegramAdapter({ id: 'telegram', config: { chatId: '1' }, secretRefs: { tokenRef: 'TOKEN' } }, { TOKEN: 'redacted' }, fetch);
+    await assert.doesNotReject(() => adapter.healthCheck());
+    assert.equal(calls.some(url => url.includes('sendDocument')), false);
+  });
+
+  it('rejects a valid token when the configured Telegram channel cannot be written', async () => {
+    const fetch = async url => {
+      if (url.includes('getMe')) return Response.json({ ok: true, result: { id: 5, username: 'bot' } });
+      if (url.includes('getChatMember')) return Response.json({ ok: true, result: { status: 'member' } });
+      return Response.json({ ok: true, result: { type: 'channel' } });
+    };
+    const adapter = new TelegramAdapter({ id: 'telegram', config: { chatId: '1' }, secretRefs: { tokenRef: 'TOKEN' } }, { TOKEN: 'redacted' }, fetch);
+    await assert.rejects(() => adapter.healthCheck(), error => error.code === STORAGE_ERROR_CODES.AUTH_FAILED);
+  });
+
+  it('maps Telegram chat access failures returned with HTTP 400 to authentication failure', async () => {
+    const adapter = new TelegramAdapter({ id: 'telegram', config: { chatId: '1' }, secretRefs: { tokenRef: 'TOKEN' } }, { TOKEN: 'redacted' }, async () => Response.json({ ok: false, description: 'Bad Request: chat not found' }, { status: 400 }));
+    await assert.rejects(() => adapter.healthCheck(), error => error.code === STORAGE_ERROR_CODES.AUTH_FAILED);
   });
 });
 

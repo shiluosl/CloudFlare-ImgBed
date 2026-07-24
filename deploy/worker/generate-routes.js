@@ -493,7 +493,7 @@ export default {
     async queue(batch, env, ctx) {
         if (env.STORAGE_QUEUE) {
             ctx.waitUntil(recordWorkerRequestEstimate(zeroCostEnvironment(env), 'queue:' + Date.now() + ':' + batch.messages.length));
-            return consumeStorageJobs(batch, zeroCostEnvironment(env), ctx);
+            return consumeStorageJobs(batch, zeroCostEnvironment(env));
         }
     },
     async scheduled(controller, env, ctx) {

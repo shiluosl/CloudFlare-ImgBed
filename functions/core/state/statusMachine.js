@@ -25,7 +25,9 @@ const REPLICA_TRANSITIONS = {
 
 const JOB_TRANSITIONS = {
   pending: ['queued', 'running', 'cancelled'],
-  queued: ['running', 'retry_wait', 'cancelled'],
+  // A Queue delivery can exhaust its platform retries while the durable D1
+  // job is still queued. Operators may safely put it back through the outbox.
+  queued: ['pending', 'running', 'retry_wait', 'cancelled'],
   running: ['succeeded', 'retry_wait', 'dead', 'cancelled'],
   retry_wait: ['pending', 'queued', 'running', 'dead', 'cancelled'],
   succeeded: [],
