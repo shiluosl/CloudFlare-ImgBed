@@ -138,6 +138,8 @@ describe('D1 job and Queue recovery integration', () => {
     await consumeStorageJobs({ messages: [second] }, {}, () => app);
     assert.equal(writes, 2);
     assert.equal(repository.target.status, 'healthy');
+    assert.equal(repository.target.last_error_code, null);
+    assert.equal(repository.target.last_error_message, null);
     assert.equal(repository.job.status, 'succeeded');
     assert.equal(second.acks, 1);
   });
@@ -418,7 +420,7 @@ class UncertainWriteRepository extends ConsumerRepository {
       file: { id: 'file_1', generation: 1, status: 'available', size: 3, content_type: 'text/plain', name: 'demo.txt' },
     });
     this.source = { id: 'replica_source', channel_id: 'channel_source', status: 'healthy', enabled: 1, health_status: 'healthy', object_key: 'file_1/demo.txt', remote_id: 'source', remote_metadata_json: '{}' };
-    this.target = { id: 'replica_target', channel_id: 'channel_target', role: 'sync_backup', status: 'retry_wait', enabled: 1, health_status: 'healthy', object_key: 'file_1/demo.txt', remote_id: null, remote_metadata_json: '{}' };
+    this.target = { id: 'replica_target', channel_id: 'channel_target', role: 'sync_backup', status: 'retry_wait', enabled: 1, health_status: 'healthy', object_key: 'file_1/demo.txt', remote_id: null, remote_metadata_json: '{}', last_error_code: 'D1_UNAVAILABLE', last_error_message: 'A previous acknowledgement failed' };
     this.failAcknowledgement = true;
   }
   async getReplica(id) { return id === this.target.id ? this.target : id === this.source.id ? this.source : null; }

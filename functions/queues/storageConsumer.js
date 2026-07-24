@@ -111,7 +111,7 @@ export async function executeStorageJob(app, env, job, file, replica) {
       await app.storage.recomputeFileHealth(file.id);
       throw Object.assign(new Error('Repaired replica size mismatch'), { code: 'CHECKSUM_MISMATCH' });
     }
-    await app.repository.updateReplica(replica.id, { status: 'healthy', remote_id: stored.remoteId, remote_metadata_json: JSON.stringify(stored.safeMetadata || {}), etag: stored.etag, checksum: stored.checksum, size: stored.size, last_success_at: Date.now() });
+    await app.repository.updateReplica(replica.id, { status: 'healthy', remote_id: stored.remoteId, remote_metadata_json: JSON.stringify(stored.safeMetadata || {}), etag: stored.etag, checksum: stored.checksum, size: stored.size, last_success_at: Date.now(), last_error_code: null, last_error_message: null });
     await app.health?.recordSuccess({ channel_id: replica.channel_id });
     await app.storage.recomputeFileHealth(file.id);
     return;
