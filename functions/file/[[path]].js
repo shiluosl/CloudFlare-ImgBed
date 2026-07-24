@@ -1056,7 +1056,8 @@ async function handleWebDAVFile(context, metadata, encodedFileName, fileType) {
         });
 
     } catch (error) {
-        return new Response(`Error: Failed to fetch from WebDAV - ${error.message}`, { status: 500 });
+        console.warn('WebDAV legacy read failed');
+        return new Response('Error: Failed to fetch from WebDAV', { status: 502 });
     }
 }
 

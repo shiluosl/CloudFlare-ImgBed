@@ -6,6 +6,7 @@ import { calculateProtectionLevel } from '../functions/core/cost/zeroCostGuard.j
 import { d1ReadsPerSampledV3Request, recordWorkerRequestEstimate, shouldEstimateWorkerRequest, workerRequestSampleRate } from '../functions/core/cost/requestMeter.js';
 import { assertFileTransition, assertReplicaTransition, assertJobTransition } from '../functions/core/state/statusMachine.js';
 import { WebDavAdapter } from '../functions/adapters/webdav/webdavAdapter.js';
+import { fetchWebDAVRead } from '../functions/utils/storage/webdavAPI.js';
 import { TelegramAdapter } from '../functions/adapters/telegram/telegramAdapter.js';
 import { S3Adapter } from '../functions/adapters/s3/s3Adapter.js';
 import { UploadService } from '../functions/core/upload/uploadService.js';
@@ -218,6 +219,29 @@ describe('WebDAV adapter contract', () => {
   it('writes, heads, reads, and idempotently deletes a path', async () => {
     const calls = []; const fetch = async (url, init) => { calls.push({ url, ...init }); if (init.method === 'HEAD') return new Response(null, { status: 200, headers: { 'Content-Length': '3', ETag: 'etag' } }); return new Response(init.method === 'GET' ? 'abc' : null, { status: init.method === 'DELETE' ? 404 : 201, headers: { ETag: 'etag' } }); };
     const adapter = new WebDavAdapter({ id: 'webdav', config: { baseUrl: 'https://storage.example/dav' } }, {}, fetch); const stored = await adapter.put({ objectKey: 'nested/a b.txt', body: new Blob(['abc']), size: 3, contentType: 'text/plain' }); assert.equal(stored.size, 3); assert.equal((await adapter.head({ objectKey: 'nested/a b.txt' })).size, 3); assert.equal(await (await adapter.get({ objectKey: 'nested/a b.txt' })).text(), 'abc'); await adapter.delete({ objectKey: 'nested/a b.txt' }); assert.match(calls.find(call => call.method === 'PUT').url, /a%20b.txt/);
+  });
+
+  it('follows a bounded validated legacy read redirect without forwarding WebDAV credentials', async () => {
+    const calls = [];
+    const response = await fetchWebDAVRead('https://webdav.example/dav/file.png', {
+      method: 'GET',
+      headers: { Authorization: 'Basic should-not-leak', Range: 'bytes=0-2' },
+    }, async (url, init) => {
+      calls.push({ url, headers: new Headers(init.headers) });
+      if (calls.length === 1) return new Response(null, { status: 302, headers: { Location: 'https://download.example/signed-object' } });
+      return new Response('abc', { status: 200 });
+    });
+    assert.equal(await response.text(), 'abc');
+    assert.equal(calls.length, 2);
+    assert.equal(calls[1].headers.has('Authorization'), false);
+    assert.equal(calls[1].headers.get('Range'), 'bytes=0-2');
+  });
+
+  it('rejects legacy WebDAV redirects to a private target without exposing the location', async () => {
+    await assert.rejects(
+      () => fetchWebDAVRead('https://webdav.example/dav/file.png', {}, async () => new Response(null, { status: 302, headers: { Location: 'http://127.0.0.1/private' } })),
+      /WebDAV read redirect rejected/,
+    );
   });
 });
 

@@ -4,6 +4,10 @@
  * Uses only Fetch/Web APIs so it works in Cloudflare Pages Functions,
  * Cloudflare Workers, and the local Node-based test/runtime paths.
  */
+import { assertExternalEndpoint } from '../../core/security/endpointValidation.js';
+
+const MAX_READ_REDIRECTS = 2;
+
 export class WebDAVAPI {
     constructor(config = {}) {
         const baseUrl = config.baseUrl;
@@ -85,8 +89,9 @@ export class WebDAVAPI {
     }
 
     async getFile(path, options = {}) {
-        const response = await fetch(this.buildObjectUrl(path), {
-            method: options.method || 'GET',
+        const method = options.method || 'GET';
+        const response = await fetchWebDAVRead(this.buildObjectUrl(path), {
+            method,
             headers: this.getRequestHeaders(options.headers || {}),
             redirect: 'manual',
         });
@@ -136,6 +141,48 @@ export class WebDAVAPI {
 
         return true;
     }
+}
+
+// Some WebDAV providers return a short-lived public download URL for reads.
+// Follow only a small, validated HTTPS redirect chain and never forward WebDAV
+// credentials to the download host.
+export async function fetchWebDAVRead(url, init = {}, fetchImpl = fetch) {
+    const method = String(init.method || 'GET').toUpperCase();
+    if (!['GET', 'HEAD'].includes(method)) {
+        return fetchImpl(url, { ...init, redirect: 'manual' });
+    }
+
+    let currentUrl = String(url);
+    let headers = new Headers(init.headers || {});
+    for (let redirectCount = 0; redirectCount <= MAX_READ_REDIRECTS; redirectCount += 1) {
+        const response = await fetchImpl(currentUrl, {
+            ...init,
+            method,
+            headers,
+            redirect: 'manual',
+        });
+        if (response.status < 300 || response.status >= 400) {
+            return response;
+        }
+
+        const location = response.headers.get('Location');
+        if (!location || redirectCount === MAX_READ_REDIRECTS) {
+            throw new Error('WebDAV read redirect rejected');
+        }
+
+        let redirectUrl;
+        try {
+            redirectUrl = new URL(location, currentUrl);
+            assertExternalEndpoint(redirectUrl, { label: 'WebDAV download redirect' });
+        } catch {
+            throw new Error('WebDAV read redirect rejected');
+        }
+
+        currentUrl = redirectUrl.toString();
+        headers = sanitizedRedirectHeaders(headers);
+    }
+
+    throw new Error('WebDAV read redirect rejected');
 }
 
 export function normalizeBaseUrl(baseUrl) {
@@ -208,6 +255,15 @@ function normalizeHeaders(headers) {
     }
 
     return {};
+}
+
+function sanitizedRedirectHeaders(headers) {
+    const sanitized = new Headers(headers);
+    sanitized.delete('Authorization');
+    sanitized.delete('Cookie');
+    sanitized.delete('Proxy-Authorization');
+    sanitized.delete('Host');
+    return sanitized;
 }
 
 function isSuccessStatus(status) {
