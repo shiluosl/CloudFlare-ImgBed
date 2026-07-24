@@ -14,7 +14,9 @@ const REPLICA_TRANSITIONS = {
   planned: ['uploading', 'retry_wait', 'deleting', 'deleted'],
   uploading: ['healthy', 'corrupt', 'retry_wait', 'permanent_failure', 'deleting'],
   healthy: ['uploading', 'suspect', 'missing', 'corrupt', 'deleting'],
-  suspect: ['healthy', 'missing', 'corrupt', 'retry_wait', 'deleting'],
+  // Repair replaces a suspect remote object from a healthy peer, so it must
+  // re-enter the upload state before it can be verified as healthy again.
+  suspect: ['healthy', 'uploading', 'missing', 'corrupt', 'retry_wait', 'deleting'],
   missing: ['uploading', 'healthy', 'retry_wait', 'deleting'],
   corrupt: ['uploading', 'healthy', 'retry_wait', 'deleting'],
   retry_wait: ['uploading', 'permanent_failure', 'deleting'],

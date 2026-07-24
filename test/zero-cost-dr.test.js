@@ -74,7 +74,7 @@ describe('zero-cost DR core', () => {
     if (recorded) assert.deepEqual(records, [{ worker_requests: 7, d1_reads: 21 }]);
     else assert.deepEqual(records, []);
   });
-  it('guards status transitions while allowing controlled recovery', () => { assert.doesNotThrow(() => assertFileTransition('receiving', 'available')); assert.doesNotThrow(() => assertFileTransition('failed', 'available')); assert.throws(() => assertFileTransition('deleted', 'available')); assert.doesNotThrow(() => assertReplicaTransition('planned', 'uploading')); assert.doesNotThrow(() => assertReplicaTransition('missing', 'healthy')); assert.throws(() => assertReplicaTransition('deleted', 'healthy')); assert.doesNotThrow(() => assertJobTransition('pending', 'queued')); assert.throws(() => assertJobTransition('succeeded', 'running')); });
+  it('guards status transitions while allowing controlled recovery', () => { assert.doesNotThrow(() => assertFileTransition('receiving', 'available')); assert.doesNotThrow(() => assertFileTransition('failed', 'available')); assert.throws(() => assertFileTransition('deleted', 'available')); assert.doesNotThrow(() => assertReplicaTransition('planned', 'uploading')); assert.doesNotThrow(() => assertReplicaTransition('suspect', 'uploading')); assert.doesNotThrow(() => assertReplicaTransition('missing', 'healthy')); assert.throws(() => assertReplicaTransition('deleted', 'healthy')); assert.doesNotThrow(() => assertJobTransition('pending', 'queued')); assert.throws(() => assertJobTransition('succeeded', 'running')); });
   it('supports independent V3 read and upload rollback flags', () => {
     assert.equal(v3ReadEnabled({ ENABLE_REPLICATION_V3: 'true', ENABLE_V3_READ: 'false' }), false);
     assert.equal(v3UploadEnabled({ ENABLE_REPLICATION_V3: 'true', ENABLE_V3_UPLOAD: 'false' }), false);
@@ -608,7 +608,7 @@ describe('read, delete, and queue recovery', () => {
   it('falls back once, schedules repair, and returns 503 when no replica works', async () => {
     const repository = new FileMemoryRepository();
     const jobs = { records: [], async create(job) { this.records.push(job); } };
-    const storage = { async readCandidates() { return repository.replicas; }, async openReplica(replica) { if (replica.id === 'primary') throw Object.assign(new Error('primary unavailable'), { code: 'NETWORK_ERROR' }); return new Response('backup'); } };
+    const storage = { async readCandidates() { return repository.replicas; }, async openReplica(replica) { if (replica.id === 'primary') throw Object.assign(new Error('primary unavailable'), { code: 'NETWORK_ERROR' }); return new Response('backup'); }, async recomputeFileHealth() { repository.file.status = repository.replicas.every(replica => replica.status === 'healthy') ? 'available' : 'degraded'; return repository.file; } };
     const service = new FileService({ repository, jobs, storage });
     const result = await service.read('file_1', new Request('https://example.test/file/file_1'));
     assert.equal(result.response.status, 200);
@@ -616,6 +616,7 @@ describe('read, delete, and queue recovery', () => {
     assert.equal(result.response.headers.get('Content-Type'), repository.file.content_type);
     assert.equal(await result.response.text(), 'backup');
     assert.equal(repository.replicas[0].status, 'suspect');
+    assert.equal(repository.file.status, 'degraded');
     assert.equal(jobs.records[0].operation, 'REPAIR_REPLICA');
     assert.equal(repository.audits[0].action, 'file.readFallback');
     storage.openReplica = async () => { throw new Error('offline'); };
