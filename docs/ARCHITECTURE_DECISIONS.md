@@ -137,3 +137,7 @@ An adapter result becomes a healthy replica only after D1 records its remote met
 ## ADR-034: Primary switching remains inside the synchronous replica pair
 
 The operations API only promotes a healthy `sync_backup` (or leaves the current healthy `primary` unchanged). It never promotes an `async_backup`; the repository atomically swaps the existing primary and synchronous backup roles. This preserves the logical model of exactly one primary plus one synchronous backup and keeps asynchronous replicas from accidentally satisfying or reshaping the synchronous availability policy.
+
+## ADR-035: Password-gated V3 uploads reuse the upstream user session
+
+The default V3 public endpoint is not anonymous. When `ENABLE_ANONYMOUS_V3_UPLOAD=false`, `POST /api/upload/v3` requires the upstream `userAuthCheck(..., 'upload')` authorization path, which accepts the existing password-login `user_session`, administrator session, or scoped upload API token. `/v3-upload` presents the upstream password login flow and never persists the password in browser storage. A successful session may enter the V3 uploader, which selects only the operator-configured `V3_DEFAULT_POLICY_ID` and always requests `safe` dual-write. Browser-controlled policy, ownership, visibility, administrator, mode, and file-ID fields are ignored. This preserves the legacy password model while preventing a password holder from selecting an internal channel or weakening replica durability.

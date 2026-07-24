@@ -103,7 +103,18 @@ npx.cmd wrangler dev --local --config deploy/worker/wrangler.toml --port 8787
 
 Use a separate Cloudflare Free account or isolated Free-plan resources for a test deployment. Run the full validation commands above and `npx.cmd wrangler deploy --dry-run --config deploy/worker/wrangler.toml` before `npm.cmd run deploy:worker`. The latter requires operator-supplied D1 and Queue identifiers and is the only command in this guide that performs a real deployment.
 
-Anonymous V3 upload is disabled by default. The implemented public endpoint is `POST /api/upload/v3`; it accepts multipart `file` and `policyId` fields, requires an `Idempotency-Key` header, and requires the `cf-turnstile-response` multipart field. It always creates a public `safe` upload and ignores caller-supplied owner, privacy, administrator, mode, and file-ID fields. Create a free Turnstile widget and store only its server-side secret:
+## Password-gated V3 portal
+
+Anonymous V3 upload is disabled by default. Configure an enabled WebDAV + Telegram `safe` policy in `/ops.html`, then set its ID as a non-secret Worker variable. The password-gated portal is available at `/v3-upload` (or `/v3-upload.html`). It reuses the upstream user upload password configured in the existing Security settings: successful `POST /api/auth/login` creates the same HttpOnly `user_session` cookie used by the legacy uploader, and the V3 page then uploads with that same-origin session.
+
+```powershell
+$env:V3_DEFAULT_POLICY_ID = "policy_webdav_telegram_safe"
+npm.cmd run deploy:worker
+```
+
+The password-gated route always uses that server-selected policy and `safe` dual-write mode. It ignores browser-supplied policy, owner, visibility, administrator, mode, and file-ID fields. Each upload still requires an `Idempotency-Key`, and the page generates one per request. Do not enable anonymous uploads merely to use the V3 portal.
+
+Anonymous V3 uploads are an optional separate mode. When explicitly enabled, `POST /api/upload/v3` accepts multipart `file` and `policyId` fields, requires an `Idempotency-Key` header, and requires the `cf-turnstile-response` multipart field. It always creates a public `safe` upload and ignores caller-supplied owner, privacy, administrator, mode, and file-ID fields. Create a free Turnstile widget and store only its server-side secret:
 
 ```powershell
 npx.cmd wrangler secret put TURNSTILE_SECRET --config deploy/worker/wrangler.toml
@@ -123,6 +134,7 @@ The operations panel's database-size field is an intentionally conservative appl
 - `npm run check:zero-cost` passes.
 - Worker bindings contain `ASSETS`, `DB`, and `STORAGE_QUEUE`; no R2 or KV namespace binding exists.
 - Create WebDAV and Telegram channels through the authenticated operations API, then create a safe policy with distinct failure domains.
+- Set `V3_DEFAULT_POLICY_ID` to that enabled safe policy before using `/v3-upload`; this variable is a policy identifier, not a secret.
 - Keep `ENABLE_ANONYMOUS_V3_UPLOAD=false` unless a free Turnstile widget, its `TURNSTILE_SECRET`, and the public client integration are configured.
 - Confirm the Cloudflare account remains on the Free plan and that Workers Paid has not been enabled.
 - Confirm the dashboard has no R2 bucket or R2 binding for this Worker; `r2_buckets` must remain absent from all deployment configuration.

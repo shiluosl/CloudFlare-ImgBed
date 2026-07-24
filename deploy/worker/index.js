@@ -60,6 +60,7 @@ import * as apiFetchRes from '../../functions/api/fetchRes.js';
 import * as apiUserConfig from '../../functions/api/userConfig.js';
 import * as random_index from '../../functions/random/index.js';
 import * as upload_index from '../../functions/upload/index.js';
+import * as v3Upload from '../../functions/v3-upload.js';
 import * as apiManageBlockCatchAll from '../../functions/api/manage/block/[[path]].js';
 import * as apiManageDeleteCatchAll from '../../functions/api/manage/delete/[[path]].js';
 import * as apiManageMetadataCatchAll from '../../functions/api/manage/metadata/[[path]].js';
@@ -121,6 +122,7 @@ const routes = [
     { path: '/api/userConfig', module: apiUserConfig, middlewares: [mw_api] },
     { path: '/random', module: random_index, middlewares: [mw_random] },
     { path: '/upload', module: upload_index, middlewares: [mw_upload] },
+    { path: '/v3-upload', module: v3Upload, middlewares: [] },
     { path: '/api/manage/block/', module: apiManageBlockCatchAll, middlewares: [mw_api, mw_api_manage], catchAll: true },
     { path: '/api/manage/delete/', module: apiManageDeleteCatchAll, middlewares: [mw_api, mw_api_manage], catchAll: true },
     { path: '/api/manage/metadata/', module: apiManageMetadataCatchAll, middlewares: [mw_api, mw_api_manage], catchAll: true },

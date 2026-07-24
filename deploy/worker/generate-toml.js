@@ -17,6 +17,7 @@ if (Object.keys(env).some(key => /(^|_)R2(_|$)|WORKERS_AI|VECTORIZ|BROWSER.*REND
 }
 
 const extraVars = parseWorkerVars(env.WORKER_VARS);
+if (env.V3_DEFAULT_POLICY_ID) extraVars.V3_DEFAULT_POLICY_ID = env.V3_DEFAULT_POLICY_ID;
 const extraVarToml = Object.entries(extraVars).map(([key, value]) => `${key} = "${escapeToml(value)}"`).join('\n');
 
 let toml = `name = "${escapeToml(name)}"

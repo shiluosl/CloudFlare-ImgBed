@@ -440,9 +440,57 @@ describe('upload disaster recovery workflow', () => {
   it('keeps anonymous V3 upload disabled unless explicitly enabled', async () => {
     assert.equal(anonymousV3UploadEnabled({ ENABLE_REPLICATION_V3: 'true', ENABLE_V3_UPLOAD: 'true' }), false);
     assert.equal(anonymousV3UploadEnabled({ ENABLE_REPLICATION_V3: 'true', ENABLE_V3_UPLOAD: 'true', ENABLE_ANONYMOUS_V3_UPLOAD: 'true' }), true);
-    const response = await anonymousUpload({ request: uploadRequest(), env: { ENABLE_REPLICATION_V3: 'true', ENABLE_V3_UPLOAD: 'true' } });
+    const response = await anonymousUpload({ request: uploadRequest(), env: { ENABLE_REPLICATION_V3: 'true', ENABLE_V3_UPLOAD: 'false' } });
     assert.equal(response.status, 503);
-    assert.equal((await response.json()).code, 'ANONYMOUS_UPLOAD_DISABLED');
+    assert.equal((await response.json()).code, 'V3_UPLOAD_DISABLED');
+  });
+  it('requires the original upload password session while anonymous V3 uploads are disabled', async () => {
+    const response = await anonymousUpload(
+      { request: uploadRequest(), env: { ENABLE_REPLICATION_V3: 'true', ENABLE_V3_UPLOAD: 'true', ENABLE_ANONYMOUS_V3_UPLOAD: 'false', V3_DEFAULT_POLICY_ID: 'policy' } },
+      { userAuthCheck: async () => false },
+    );
+    assert.equal(response.status, 401);
+    assert.equal((await response.json()).code, 'UPLOAD_AUTH_REQUIRED');
+  });
+  it('uses a password-authenticated session for safe V3 uploads without trusting client fields', async () => {
+    const received = [];
+    const audits = [];
+    const response = await anonymousUpload(
+      { request: uploadRequest({ ownerId: 'attacker', isPublic: 'false', mode: 'fast', fileId: 'chosen-id' }), env: { ENABLE_REPLICATION_V3: 'true', ENABLE_V3_UPLOAD: 'true', ENABLE_ANONYMOUS_V3_UPLOAD: 'false', V3_DEFAULT_POLICY_ID: 'safe-policy' } },
+      {
+        userAuthCheck: async (_env, url, request, permission) => url.pathname === '/api/upload/v3' && request.method === 'POST' && permission === 'upload',
+        runtime: () => ({
+          upload: { async upload(input) { received.push(input); return { file: { id: 'file_created', status: 'available', name: input.name, content_type: input.contentType, size: input.size }, replicas: [], degraded: false }; } },
+          repository: { async audit(entry) { audits.push(entry); } },
+        }),
+      },
+    );
+    assert.equal(response.status, 201);
+    assert.equal(received[0].policyId, 'safe-policy');
+    assert.equal(received[0].ownerId, null);
+    assert.equal(received[0].isPublic, true);
+    assert.equal(received[0].admin, false);
+    assert.equal(received[0].mode, 'safe');
+    assert.equal(received[0].id, undefined);
+    assert.equal(audits[0].action, 'file.passwordAuthenticatedUploaded');
+    assert.equal((await response.json()).url, '/file/file_created');
+  });
+  it('requires an operator-selected default policy for password-gated V3 uploads', async () => {
+    const response = await anonymousUpload(
+      { request: uploadRequest(), env: { ENABLE_REPLICATION_V3: 'true', ENABLE_V3_UPLOAD: 'true', ENABLE_ANONYMOUS_V3_UPLOAD: 'false' } },
+      { userAuthCheck: async () => true },
+    );
+    assert.equal(response.status, 503);
+    assert.equal((await response.json()).code, 'V3_DEFAULT_POLICY_REQUIRED');
+  });
+  it('keeps the V3 upload portal session-only and submits logical upload requests', () => {
+    const portal = readFileSync('frontend-dist/v3-upload.html', 'utf8');
+    assert.match(portal, /\/api\/auth\/login/);
+    assert.match(portal, /\/api\/auth\/sessionCheck/);
+    assert.match(portal, /\/api\/upload\/v3/);
+    assert.match(portal, /credentials: 'same-origin'/);
+    assert.match(portal, /Idempotency-Key': crypto\.randomUUID\(\)/);
+    assert.doesNotMatch(portal, /localStorage|sessionStorage/);
   });
   it('fails closed when Turnstile is missing or rejects an anonymous V3 upload', async () => {
     let runtimeCalls = 0;

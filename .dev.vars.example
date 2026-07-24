@@ -5,6 +5,8 @@ ENABLE_REPLICATION_V3=true
 ENABLE_V3_UPLOAD=true
 ENABLE_V3_READ=true
 ENABLE_ANONYMOUS_V3_UPLOAD=false
+# Required for password-gated V3 uploads. Use the enabled safe policy ID from /ops.html.
+V3_DEFAULT_POLICY_ID=replace-with-enabled-safe-policy-id
 WORKER_REQUEST_SAMPLE_RATE=100
 D1_READS_PER_SAMPLED_V3_REQUEST=3
 MANAGEMENT_PASSWORD=replace-in-local-development
