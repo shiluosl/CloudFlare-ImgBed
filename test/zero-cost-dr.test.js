@@ -30,6 +30,7 @@ import { authorizePrivateV3Read } from '../functions/core/security/privateFileAc
 import { verifyTurnstile } from '../functions/core/security/turnstile.js';
 import { visibleUploadChannels } from '../functions/api/channels.js';
 import { isLegacyR2ChannelForbidden } from '../functions/core/security/zeroCostLegacyGuard.js';
+import { FILE_CACHE_CONTROL, return404 } from '../functions/file/fileTools.js';
 import { getUploadConfig, onRequest as uploadConfigRequest } from '../functions/api/manage/sysConfig/upload.js';
 import { getPageConfig, onRequest as pageConfigRequest } from '../functions/api/manage/sysConfig/page.js';
 import { execFileSync } from 'node:child_process';
@@ -38,6 +39,17 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
 describe('zero-cost DR core', () => {
+  it('never caches a legacy file miss while a later upload may make it available', async () => {
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = async () => new Response('not found', { status: 404 });
+    try {
+      const response = await return404(new URL('https://example.test/file/missing.png'));
+      assert.equal(response.status, 404);
+      assert.equal(response.headers.get('Cache-Control'), FILE_CACHE_CONTROL.NO_STORE);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
   it('invokes the queue consumer with its default runtime factory', () => {
     const template = readFileSync('deploy/worker/generate-routes.js', 'utf8');
     assert.match(template, /consumeStorageJobs\(batch, zeroCostEnvironment\(env\)\);/);

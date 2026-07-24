@@ -182,7 +182,9 @@ export async function return404(url) {
             {
                 status: 404,
                 headers: {
-                    "Cache-Control": "public, max-age=86400"
+                    // A file may be uploaded immediately after an initial miss.
+                    // Do not let a browser pin that stale miss for a full day.
+                    "Cache-Control": FILE_CACHE_CONTROL.NO_STORE
                 }
             }
         );
@@ -192,7 +194,7 @@ export async function return404(url) {
             headers: {
                 "Content-Type": "image/png",
                 "Content-Disposition": "inline",
-                "Cache-Control": "public, max-age=86400",
+                "Cache-Control": FILE_CACHE_CONTROL.NO_STORE,
             },
         });
     }
